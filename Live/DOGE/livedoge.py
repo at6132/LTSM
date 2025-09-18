@@ -54,20 +54,20 @@ class COMClient:
         timestamp = int(time.time())
         
         payload = {
-            "idempotency_key": f"livedoge_{timestamp}_{symbol}_{side}_{int(time.time() * 1000000) % 1000000}",
+            "idempotency_key": f"LTSM_v1_{timestamp}_{symbol}_{side}_{int(time.time() * 1000000) % 1000000}",
             "environment": {"sandbox": True},  # PAPER TRADING
             "source": {
                 "strategy_id": "LTSM",
-                "instance_id": "live_001",
-                "owner": "trader"
+                "instance_id": "instance_001", 
+                "owner": "live_trader"
             },
             "order": {
-                "instrument": {"class": "crypto_perp", "symbol": symbol},
+                "instrument": {"class": "crypto_perp", "symbol": "DOGE_USDT"},  # Use underscore format per docs
                 "side": side,
                 "order_type": order_type,
                 "time_in_force": "GTC",
                 "flags": {
-                    "post_only": order_type == "LIMIT",
+                    "post_only": order_type == "LIMIT",  # Post-only maker orders per user preference
                     "reduce_only": False,
                     "hidden": False,
                     "iceberg": {},
@@ -727,8 +727,13 @@ class LiveDOGETrader:
 def load_config() -> Dict:
     return {
         "com_base_url": "http://localhost:8000",
-        "api_key": "TFRTTV8yMDI1MDkxOF8xMzE0NTXYDwFBbdq8p2hysAz9YwGxeZcskuFrSUTIMsX30IdzIA",
-        "secret_key": "fH_6KHa4S8a4R3NY7NARbJyliDj7FB9851GEuaK5iXxBzV4w8cASOzwOhpWNKdwStALIY4zuoIkf92f5--INPg",
+        "api_key": "UkFWRl8yMDI1MDkxOF8yMDU4NDVAibQoNKUlDR_SmPzIYHxui1E4kNPrpCmQADqKdu7pvw",
+        "secret_key": "1u28c-DX3vlys3u0-iNWFvRSnoy420jKDolC2bzH84Gc7HL2C1m5N4Gur7YEn4SdtN-ZN7n3E2YmQaDtirCSNw",
+        "salt": "_L1X-cWBuqhu08NeBbv97gfTo8E_N9ON1TZhHIGiPN4",
+        "strategy_name": "LTSM_v1",
+        "strategy_id": "LTSM",
+        "instance_id": "instance_001",
+        "owner": "live_trader",
         "binary_model_path": "models/binary.pth",
         "directional_model_path": "models/directonal.pth",
         "ohlcv_file": "datadoge.csv",

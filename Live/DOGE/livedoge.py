@@ -8,6 +8,7 @@ import requests
 import pandas as pd
 import numpy as np
 import torch
+import torch.nn as nn
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 from sklearn.preprocessing import RobustScaler

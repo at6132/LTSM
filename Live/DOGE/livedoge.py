@@ -363,7 +363,12 @@ class COMClient:
                                 "time_in_force": "GTC"
                             }
                         }
-                    ]
+                    ],
+                    "timestop": {
+                        "enabled": True,
+                        "duration_minutes": 30.0,  # 30-minute timestop
+                        "action": "MARKET_EXIT"
+                    }
                 }
             }
         }
@@ -395,45 +400,6 @@ class COMClient:
             logger.error(f"[ERROR] COM request failed: {e}")
             return {"error": str(e)}
     
-    def close_position(self, position_ref: str, reason: str = "TIME_STOP") -> Dict:
-        """Close position using COM API - for timestop management"""
-        method = "POST"
-        path = f"/api/v1/positions/{position_ref}/close"
-        timestamp = int(time.time())
-        
-        payload = {
-            "idempotency_key": f"close_{position_ref}_{timestamp}",
-            "environment": {"sandbox": True},  # PAPER TRADING
-            "amount": {
-                "type": "ALL"
-            },
-            "order": {
-                "order_type": "MARKET"
-            }
-        }
-        
-        body = json.dumps(payload)
-        signature = self.create_hmac_signature(timestamp, method, path, body)
-        
-        headers = {
-            "Authorization": f'HMAC key_id="{self.api_key}", signature="{signature}", ts={timestamp}',
-            "Content-Type": "application/json"
-        }
-        
-        try:
-            url = f"{self.base_url}{path}"
-            response = self.session.post(url, json=payload, headers=headers)
-            
-            if response.status_code in [200, 201]:
-                result = response.json()
-                logger.info(f"[SUCCESS] Position {position_ref} closed via COM ({reason}): {result}")
-                return result
-            else:
-                logger.error(f"[ERROR] Close position failed: {response.status_code} - {response.text}")
-                return {"error": response.text}
-        except Exception as e:
-            logger.error(f"[ERROR] COM close position request failed: {e}")
-            return {"error": str(e)}
 
 class ModelInference:
     def __init__(self, binary_model_path: str, directional_model_path: str):
@@ -881,28 +847,14 @@ class PositionManager:
             return None
     
     def check_stops(self, max_hold_minutes: int = 30, current_price: float = None):
-        """Check timestops and send close orders to COM (price stops handled by COM automatically)"""
-        current_time = datetime.now()
-        for position_id, position in list(self.positions.items()):
-            if position["status"] != "OPEN":
-                continue
-                
-            # Time stop check - managed internally, then send close order to COM
-            hold_time = current_time - position["entry_time"]
-            if hold_time.total_seconds() > (max_hold_minutes * 60):
-                logger.info(f"[TIME_STOP] Closing position {position_id} after {max_hold_minutes} minutes")
-                
-                # Send close order to COM
-                close_result = self.com_client.close_position(position_id, reason="TIME_STOP")
-                
-                if "error" not in close_result:
-                    position["status"] = "CLOSED"
-                    position["close_reason"] = "TIME_STOP"
-                    position["close_price"] = current_price if current_price else position["entry_price"]
-                    logger.info(f"[SUCCESS] Position {position_id} closed via COM for TIME_STOP")
-                else:
-                    logger.error(f"[ERROR] Failed to close position {position_id} via COM: {close_result['error']}")
-                continue
+        """No internal stop monitoring - COM handles all stops automatically via exit_plan"""
+        # COM now handles all stops automatically:
+        # - 0.35% Take Profit
+        # - -2% Stop Loss  
+        # - 30-minute TimeStop
+        # No need for internal monitoring anymore!
+        logger.info("[INFO] All stops managed by COM automatically via exit_plan")
+        pass
     
     def get_open_positions_count(self) -> int:
         return len([p for p in self.positions.values() if p["status"] == "OPEN"])
@@ -961,9 +913,7 @@ class LiveDOGETrader:
                         self.last_candle_time = latest_candle_time
                         await self.process_new_candle()
                 
-                # Check time stops and price stops (-2% SL)
-                current_price = self.feature_engine.ohlcv_buffer['close'].iloc[-1] if len(self.feature_engine.ohlcv_buffer) > 0 else None
-                self.position_manager.check_stops(self.max_hold_minutes, current_price)
+                # COM handles all stops automatically via exit_plan - no internal monitoring needed
                 
                 await asyncio.sleep(5)  # Check every 5 seconds
                 

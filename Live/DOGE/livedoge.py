@@ -714,16 +714,16 @@ class AdvancedFeatureEngine:
                 model_feature_cols = self.feature_cols
                 logger.info(f"[DEBUG] Model expects {len(model_feature_cols)} features from checkpoint")
             else:
-            # Fallback to hardcoded feature columns (37 base features + y_actionable = 38 total)
-            model_feature_cols = [
-                "open", "high", "low", "close", "volume",
-                "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
-                "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
-                "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
-                "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
-                "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
-                "minute_sin", "minute_cos", "day_sin", "day_cos", "y_actionable"
-            ]  # 37 base features + y_actionable = 38 total
+                # Fallback to hardcoded feature columns (37 base features + y_actionable = 38 total)
+                model_feature_cols = [
+                    "open", "high", "low", "close", "volume",
+                    "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
+                    "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
+                    "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
+                    "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
+                    "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
+                    "minute_sin", "minute_cos", "day_sin", "day_cos", "y_actionable"
+                ]  # 37 base features + y_actionable = 38 total
                 logger.info(f"[DEBUG] Using hardcoded {len(model_feature_cols)} features (fallback)")
             
             # Get last 60 rows for sequence (like backtester)

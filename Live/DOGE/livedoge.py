@@ -748,16 +748,16 @@ class AdvancedFeatureEngine:
                 model_feature_cols = self.feature_cols
                 logger.info(f"[DEBUG] Model expects {len(model_feature_cols)} features from checkpoint")
             else:
-                # Fallback to hardcoded feature columns (38 features for binary model)
-                model_feature_cols = [
-                    "open", "high", "low", "close", "volume", "quote_volume",
-                    "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
-                    "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
-                    "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
-                    "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
-                    "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
-                    "minute_sin", "minute_cos", "day_sin", "day_cos"
-                ]  # 37 features (38 with ts, but we don't include ts in feature matrix)
+            # Fallback to hardcoded feature columns (37 base features + y_actionable = 38 total)
+            model_feature_cols = [
+                "open", "high", "low", "close", "volume",
+                "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
+                "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
+                "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
+                "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
+                "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
+                "minute_sin", "minute_cos", "day_sin", "day_cos", "y_actionable"
+            ]  # 37 base features + y_actionable = 38 total
                 logger.info(f"[DEBUG] Using hardcoded {len(model_feature_cols)} features (fallback)")
             
             # Get last 60 rows for sequence (like backtester)
@@ -767,7 +767,10 @@ class AdvancedFeatureEngine:
             feature_matrix = np.zeros((60, len(model_feature_cols)))
             
             for i, col in enumerate(model_feature_cols):
-                if col in sequence_data.columns:
+                if col == "y_actionable":
+                    # Always set y_actionable to 0 for binary model input (as you mentioned)
+                    feature_matrix[:, i] = 0.0
+                elif col in sequence_data.columns:
                     feature_matrix[:, i] = sequence_data[col].fillna(0.0).values
                 else:
                     logger.warning(f"[WARNING] Missing feature column: {col}")

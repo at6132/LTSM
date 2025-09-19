@@ -268,15 +268,19 @@ class AdvancedFeatureEngine:
         self.ohlcv_buffer = pd.DataFrame()
         self.trades_buffer = pd.DataFrame()
         
-        # Load advanced features data for reference
-        try:
-            self.advanced_features = pd.read_parquet('../../features/advanced_features_DOGEUSDT_1m.parquet')
-            self.feature_columns = [col for col in self.advanced_features.columns 
-                                  if col not in ['ts', 'y_move', 'y_actionable', 'y_hit', 'y_tth', 'y_direction']]
-            logger.info(f"[FEATURES] Loaded {len(self.feature_columns)} advanced feature columns")
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to load advanced features reference: {e}")
-            self.feature_columns = []
+        # Hardcoded feature columns (no parquet dependency)
+        self.feature_columns = [
+            "open", "high", "low", "close", "volume", "quote_volume",
+            "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
+            "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
+            "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
+            "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
+            "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
+            "minute_sin", "minute_cos", "day_sin", "day_cos", 
+            "session_asia", "session_europe", "session_us",
+            "price_position", "vol_concentration", "vol_entropy"
+        ]
+        logger.info(f"[FEATURES] Using {len(self.feature_columns)} hardcoded feature columns")
         
     def update_data(self, ohlcv_file: str, trades_file: str):
         ohlcv_ok = self.update_ohlcv(ohlcv_file)

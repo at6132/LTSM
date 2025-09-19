@@ -1273,6 +1273,7 @@ base_unit: tokens
                 <li><strong>Advanced Triggers:</strong> Price-based, percentage-based, trailing, and ratchet triggers</li>
                 <li><strong>Execution Control:</strong> Market, limit, or stop orders for each exit</li>
                 <li><strong>After-Fill Actions:</strong> Automatic actions after each exit (e.g., move SL to breakeven)</li>
+                <li><strong>⏰ TimeStop:</strong> Automatic position closure after a specified time duration</li>
             </ul>
 
             <h3>Exit Plan Schema</h3>
@@ -1338,10 +1339,54 @@ base_unit: tokens
           "time_in_force": "GTC"
         }
       }
-    ]
+    ],
+    "timestop": {
+      "enabled": true,
+      "duration_minutes": 5.0,
+      "action": "MARKET_EXIT"
+    }
   }
 }</pre>
             </div>
+
+            <h4>TimeStop Configuration</h4>
+            <table class="params-table">
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                        <th>Required</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>enabled</code></td>
+                        <td>boolean</td>
+                        <td>Whether timestop is enabled</td>
+                        <td><span class="required">Required</span></td>
+                    </tr>
+                    <tr>
+                        <td><code>duration_minutes</code></td>
+                        <td>number</td>
+                        <td>Duration in minutes before automatic exit</td>
+                        <td><span class="required">Required</span></td>
+                    </tr>
+                    <tr>
+                        <td><code>action</code></td>
+                        <td>string</td>
+                        <td>Action to take: <code>MARKET_EXIT</code>, <code>CANCEL_ALL</code>, or <code>BOTH</code></td>
+                        <td><span class="optional">Optional</span> (default: <code>MARKET_EXIT</code>)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h4>TimeStop Actions</h4>
+            <ul style="margin-left: 20px; margin-bottom: 20px;">
+                <li><strong><code>MARKET_EXIT</code>:</strong> Automatically place a market order to close the entire position</li>
+                <li><strong><code>CANCEL_ALL</code>:</strong> Cancel all pending TP/SL orders without closing the position</li>
+                <li><strong><code>BOTH</code>:</strong> Cancel all orders AND place market exit order</li>
+            </ul>
 
             <h3>Exit Plan Components</h3>
             
@@ -1590,6 +1635,119 @@ base_unit: tokens
     }
   },
   "notes": "Advanced order with multi-level exit plan"
+}</pre>
+                </div>
+            </div>
+
+            <div class="example">
+                <h4>Order with TimeStop (5-minute auto-exit)</h4>
+                <div class="code-block">
+                    <pre>{
+  "idempotency_key": "timestop_strategy_001",
+  "environment": {
+    "sandbox": true
+  },
+  "source": {
+    "strategy_id": "timestop_strategy_001",
+    "instance_id": "instance_001",
+    "owner": "algo_dev"
+  },
+  "order": {
+    "instrument": {
+      "class": "crypto_perp",
+      "symbol": "DOGE_USDT"
+    },
+    "side": "BUY",
+    "quantity": {
+      "type": "contracts",
+      "value": 100
+    },
+    "order_type": "MARKET",
+    "time_in_force": "IOC",
+    "flags": {
+      "post_only": false,
+      "reduce_only": false,
+      "hidden": false,
+      "iceberg": {},
+      "allow_partial_fills": true
+    },
+    "routing": {
+      "mode": "AUTO"
+    },
+    "leverage": {
+      "enabled": true,
+      "leverage": 25.0
+    },
+    "exit_plan": {
+      "legs": [
+        {
+          "kind": "TP",
+          "label": "Quick TP (60%)",
+          "allocation": {
+            "type": "percentage",
+            "value": 60.0
+          },
+          "trigger": {
+            "mode": "PRICE",
+            "price_type": "MARK",
+            "value": 0.2800
+          },
+          "exec": {
+            "order_type": "LIMIT",
+            "price": 0.2800,
+            "time_in_force": "GTC"
+          },
+          "after_fill_actions": [
+            {
+              "action": "SET_SL_TO_BREAKEVEN"
+            }
+          ]
+        },
+        {
+          "kind": "TP",
+          "label": "Runner TP (40%)",
+          "allocation": {
+            "type": "percentage",
+            "value": 40.0
+          },
+          "trigger": {
+            "mode": "PRICE",
+            "price_type": "MARK",
+            "value": 0.2900
+          },
+          "exec": {
+            "order_type": "LIMIT",
+            "price": 0.2900,
+            "time_in_force": "GTC"
+          }
+        },
+        {
+          "kind": "SL",
+          "label": "Stop Loss",
+          "allocation": {
+            "type": "percentage",
+            "value": 100.0
+          },
+          "trigger": {
+            "mode": "PRICE",
+            "price_type": "MARK",
+            "value": 0.2700
+          },
+          "exec": {
+            "order_type": "STOP",
+            "stop_price": 0.2700,
+            "time_in_force": "GTC"
+          }
+        }
+      ],
+      "timestop": {
+        "enabled": true,
+        "duration_minutes": 5.0,
+        "action": "MARKET_EXIT"
+      }
+    }
+  },
+  "notes": "Order with 5-minute timestop - will automatically market exit after 5 minutes regardless of TP/SL status"
 }</pre>
                 </div>
             </div>
@@ -1882,6 +2040,16 @@ base_unit: tokens
 {
   "detail": "Price is required for LIMIT orders"
 }</pre>
+            </div>
+
+            <div class="alert warning">
+                <h4>⚠️ Common Mistakes</h4>
+                <p><strong>422 Unprocessable Entity Error:</strong> Make sure you're using the correct field names in your payload:</p>
+                <ul>
+                    <li>❌ <strong>WRONG:</strong> <code>"execution": {"order_type": "MARKET"}</code></li>
+                    <li>✅ <strong>CORRECT:</strong> <code>"order": {"order_type": "MARKET"}</code></li>
+                </ul>
+                <p>The API expects <code>"order"</code>, not <code>"execution"</code> for the close order specification.</p>
             </div>
 
             <h4>Python Example</h4>
@@ -2731,6 +2899,31 @@ while position.status == "OPEN":
   }
 }
 
+// Position closed event
+{
+  "event_type": "POSITION_CLOSED",
+  "occurred_at": "2025-09-18T15:33:36.069Z",
+  "order_ref": "ord_1234567890_1234",
+  "position_ref": "pos_1234567890_1234",
+  "details": {
+    "symbol": "DOGE_USDT",
+    "side": "BUY",
+    "size": 1000.0,
+    "entry_price": 0.26574,
+    "exit_price": 0.27120,
+    "realized_pnl": 54.60,
+    "total_fees": 0.32,
+    "volume": 265.74,
+    "leverage": 25.0,
+    "duration_seconds": 3600,
+    "max_favorable_pct": 2.1,
+    "max_adverse_pct": -0.8,
+    "close_reason": "POSITION_CLOSED",
+    "open_time": "2025-09-18T14:33:36.069Z",
+    "close_time": "2025-09-18T15:33:36.069Z"
+  }
+}
+
 // Position cleanup event
 {
   "type": "POSITION_CLEANUP",
@@ -2959,6 +3152,110 @@ signature = create_websocket_signature("your_secret_key", timestamp, "your_api_k
 }</pre>
             </div>
 
+            <div class="warning-box">
+                <h4>⚠️ Critical: Understanding Authentication Responses</h4>
+                <p><strong>IMPORTANT:</strong> When you receive <code>{"status": "AUTH_ACK", "message": null}</code>, this means authentication was <strong>SUCCESSFUL</strong>, not failed!</p>
+                <ul style="margin-left: 20px; margin-bottom: 20px;">
+                    <li><strong>AUTH_ACK</strong> = Authentication successful ✅</li>
+                    <li><strong>AUTH_NACK</strong> = Authentication failed ❌</li>
+                </ul>
+                <p>If your client is treating <code>AUTH_ACK</code> as a failure, check your response parsing logic. The correct flow is:</p>
+                <ol style="margin-left: 20px; margin-bottom: 20px;">
+                    <li>Send AUTH message with HMAC signature</li>
+                    <li>Receive response with <code>status: "AUTH_ACK"</code></li>
+                    <li>Send SUBSCRIBE message</li>
+                    <li>Start receiving events</li>
+                </ol>
+            </div>
+
+            <h3>Complete Working Example</h3>
+            <p>Here's a complete working example that demonstrates proper WebSocket authentication and event handling:</p>
+            <div class="code-block">
+                <pre>import asyncio
+import websockets
+import json
+import hmac
+import hashlib
+import time
+
+async def connect_to_com_websocket():
+    """Complete WebSocket client example"""
+    
+    # Your API credentials
+    API_KEY = "your_api_key_here"
+    SECRET_KEY = "your_secret_key_here"
+    BASE_URL = "ws://localhost:8000"
+    STRATEGY_ID = "your_strategy_id"
+    
+    # Create signature
+    def create_signature(secret_key: str, timestamp: int, key_id: str) -> str:
+        data_string = f"{key_id}\n{timestamp}"
+        return hmac.new(
+            secret_key.encode('utf-8'),
+            data_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+    
+    try:
+        # Connect to WebSocket
+        async with websockets.connect(f"{BASE_URL}/api/v1/stream") as websocket:
+            print("✅ Connected to WebSocket")
+            
+            # Step 1: Authenticate
+            timestamp = int(time.time())
+            signature = create_signature(SECRET_KEY, timestamp, API_KEY)
+            
+            auth_message = {
+                "type": "AUTH",
+                "key_id": API_KEY,
+                "ts": timestamp,
+                "signature": signature
+            }
+            
+            await websocket.send(json.dumps(auth_message))
+            print(f"📤 Sent auth: {auth_message}")
+            
+            # Step 2: Wait for auth response
+            auth_response = await websocket.recv()
+            auth_data = json.loads(auth_response)
+            print(f"📥 Auth response: {auth_data}")
+            
+            # IMPORTANT: Check for AUTH_ACK (success), not AUTH_NACK (failure)
+            if auth_data.get("status") == "AUTH_ACK":
+                print("✅ Authentication successful!")
+                
+                # Step 3: Subscribe to strategy
+                subscribe_message = {
+                    "type": "SUBSCRIBE",
+                    "strategy_id": STRATEGY_ID,
+                    "events": ["ORDER_UPDATE", "FILL", "POSITION_UPDATE"]
+                }
+                
+                await websocket.send(json.dumps(subscribe_message))
+                print(f"📤 Sent subscribe: {subscribe_message}")
+                
+                # Step 4: Wait for subscribe response
+                subscribe_response = await websocket.recv()
+                subscribe_data = json.loads(subscribe_response)
+                print(f"📥 Subscribe response: {subscribe_data}")
+                
+                # Step 5: Listen for events
+                print("🎧 Listening for events...")
+                while True:
+                    event = await websocket.recv()
+                    event_data = json.loads(event)
+                    print(f"📨 Event: {event_data}")
+                    
+            else:
+                print(f"❌ Authentication failed: {auth_data}")
+                
+    except Exception as e:
+        print(f"❌ Error: {e}")
+
+# Run the example
+asyncio.run(connect_to_com_websocket())</pre>
+            </div>
+
             <h3>Testing WebSocket Authentication</h3>
             <p>The WebSocket authentication system has been thoroughly tested using the documented methods. The test results confirm:</p>
             <ul style="margin-left: 20px; margin-bottom: 20px;">
@@ -3016,6 +3313,11 @@ signature = create_websocket_signature("your_secret_key", timestamp, "your_api_k
                         <td><code>POSITION_UPDATE</code></td>
                         <td>Position changes</td>
                         <td>position_ref, state, pnl</td>
+                    </tr>
+                    <tr>
+                        <td><code>POSITION_CLOSED</code></td>
+                        <td>Position closed with final results</td>
+                        <td>position_ref, realized_pnl, exit_price, fees, duration</td>
                     </tr>
                     <tr>
                         <td><code>STOP_TRIGGERED</code></td>

@@ -42,26 +42,66 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         return x + self.pe[:, :x.size(1)]
 
+class MultiHeadAttention(nn.Module):
+    """Enhanced multi-head attention for financial time series."""
+    
+    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % num_heads == 0
+        
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.head_dim = d_model // num_heads
+        
+        self.q_linear = nn.Linear(d_model, d_model)
+        self.k_linear = nn.Linear(d_model, d_model)
+        self.v_linear = nn.Linear(d_model, d_model)
+        self.out_linear = nn.Linear(d_model, d_model)
+        
+        self.dropout = nn.Dropout(dropout)
+        self.scale = math.sqrt(self.head_dim)
+        
+    def forward(self, x, mask=None):
+        batch_size, seq_len, _ = x.shape
+        
+        Q = self.q_linear(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = self.k_linear(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        V = self.v_linear(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale
+        
+        if mask is not None:
+            scores.masked_fill_(mask == 0, -1e9)
+        
+        attention = torch.softmax(scores, dim=-1)
+        attention = self.dropout(attention)
+        
+        out = torch.matmul(attention, V)
+        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
+        
+        return self.out_linear(out), attention
+
 class TransformerBlock(nn.Module):
     """Transformer block with multi-head attention and feed-forward."""
     
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
-        self.attention = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.attention = MultiHeadAttention(d_model, num_heads, dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        
         self.feed_forward = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(d_ff, d_model)
+            nn.Linear(d_ff, d_model),
+            nn.Dropout(dropout)
         )
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-    
+        
     def forward(self, x, mask=None):
         # Multi-head attention with residual connection
-        attn_output, attention_weights = self.attention(x, x, x, attn_mask=mask)
-        x = self.norm1(x + self.dropout(attn_output))
+        attn_out, attention_weights = self.attention(x, mask)
+        x = self.norm1(x + attn_out)
         
         # Feed-forward with residual connection
         ff_out = self.feed_forward(x)
@@ -127,6 +167,52 @@ class BinaryMoveModel(nn.Module):
         
         return outputs
 
+class PositionalEncodingDirectional(nn.Module):
+    """Positional encoding for directional model (different format)."""
+    def __init__(self, d_model: int, max_seq_length: int = 5000):
+        super().__init__()
+        
+        pe = torch.zeros(max_seq_length, d_model)
+        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)  # Shape: [max_seq_length, 1, d_model]
+        
+        self.register_buffer('pe', pe)
+        
+    def forward(self, x):
+        return x + self.pe[:x.size(0), :]
+
+class TransformerBlockDirectional(nn.Module):
+    """Single transformer block with multi-head attention for directional model"""
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        
+        self.attention = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        
+        self.feed_forward = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model),
+            nn.Dropout(dropout)
+        )
+        
+    def forward(self, x):
+        # Multi-head attention
+        attn_out, attention_weights = self.attention(x, x, x)
+        x = self.norm1(x + attn_out)
+        
+        # Feed forward
+        ff_out = self.feed_forward(x)
+        x = self.norm2(x + ff_out)
+        
+        return x, attention_weights
+
 class TradingDirectionalModel(nn.Module):
     """Phase 2: Trading-grade directional model for predicting move direction."""
     
@@ -138,11 +224,11 @@ class TradingDirectionalModel(nn.Module):
         
         # Input projection
         self.input_projection = nn.Linear(input_dim, d_model)
-        self.pos_encoding = PositionalEncoding(d_model)
+        self.pos_encoding = PositionalEncodingDirectional(d_model)
         
         # Transformer encoder layers
         self.transformer_layers = nn.ModuleList([
-            TransformerBlock(d_model, num_heads, d_ff, dropout)
+            TransformerBlockDirectional(d_model, num_heads, d_ff, dropout)
             for _ in range(num_layers)
         ])
         

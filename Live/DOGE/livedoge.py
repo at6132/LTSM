@@ -22,15 +22,174 @@ logger = logging.getLogger(__name__)
 sys.path.append('../../')
 sys.path.append('../../data_prep/')
 
-# Import model architectures
-try:
-    from train_baseline import BinaryMoveModel
-    from train_phase2_directional import TradingDirectionalModel
-    logger.info("[AI] Model architectures imported successfully")
-except Exception as e:
-    logger.error(f"[ERROR] Failed to import model architectures: {e}")
-    BinaryMoveModel = None
-    TradingDirectionalModel = None
+# Model architectures embedded directly (no external dependencies)
+import math
+
+class PositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding."""
+    
+    def __init__(self, d_model: int, max_len: int = 5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * 
+                           (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
+    
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1)]
+
+class TransformerBlock(nn.Module):
+    """Transformer block with multi-head attention and feed-forward."""
+    
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.feed_forward = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model)
+        )
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+    
+    def forward(self, x, mask=None):
+        # Multi-head attention with residual connection
+        attn_output, attention_weights = self.attention(x, x, x, attn_mask=mask)
+        x = self.norm1(x + self.dropout(attn_output))
+        
+        # Feed-forward with residual connection
+        ff_out = self.feed_forward(x)
+        x = self.norm2(x + ff_out)
+        
+        return x, attention_weights
+
+class BinaryMoveModel(nn.Module):
+    """Binary model for move prediction - predicts if market will move 0.35% within 5 bars."""
+    
+    def __init__(self, input_dim: int, d_model: int = 256, num_heads: int = 8, 
+                 num_layers: int = 6, d_ff: int = 1024, dropout: float = 0.1):
+        super().__init__()
+        
+        self.d_model = d_model
+        
+        # Input projection
+        self.input_projection = nn.Linear(input_dim, d_model)
+        self.pos_encoding = PositionalEncoding(d_model)
+        
+        # Transformer encoder layers
+        self.transformer_layers = nn.ModuleList([
+            TransformerBlock(d_model, num_heads, d_ff, dropout)
+            for _ in range(num_layers)
+        ])
+        
+        self.dropout = nn.Dropout(dropout)
+        
+        # Binary classification head (0=no move, 1=expected move)
+        self.move_head = nn.Sequential(
+            nn.Linear(d_model, 128),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 64),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 2)  # Binary: 0 or 1
+        )
+        
+    def forward(self, x):
+        # x: (batch_size, seq_len, input_dim)
+        batch_size, seq_len, _ = x.shape
+        
+        # Input projection and positional encoding
+        x = self.input_projection(x)  # (batch_size, seq_len, d_model)
+        x = self.pos_encoding(x)
+        x = self.dropout(x)
+        
+        # Pass through transformer layers
+        attention_weights = []
+        for layer in self.transformer_layers:
+            x, attn_weights = layer(x)
+            attention_weights.append(attn_weights)
+        
+        # Use last timestep for prediction
+        last_hidden = x[:, -1, :]  # (batch_size, d_model)
+        
+        # Generate move prediction
+        outputs = {
+            'move': self.move_head(last_hidden),
+            'attention_weights': attention_weights[-1] if attention_weights else None
+        }
+        
+        return outputs
+
+class TradingDirectionalModel(nn.Module):
+    """Phase 2: Trading-grade directional model for predicting move direction."""
+    
+    def __init__(self, input_dim: int, d_model: int = 128, num_heads: int = 4, 
+                 num_layers: int = 3, d_ff: int = 512, dropout: float = 0.2):
+        super().__init__()
+        
+        self.d_model = d_model
+        
+        # Input projection
+        self.input_projection = nn.Linear(input_dim, d_model)
+        self.pos_encoding = PositionalEncoding(d_model)
+        
+        # Transformer encoder layers
+        self.transformer_layers = nn.ModuleList([
+            TransformerBlock(d_model, num_heads, d_ff, dropout)
+            for _ in range(num_layers)
+        ])
+        
+        # Attention pooling for sequence summarization
+        self.attention_pooling = nn.Sequential(
+            nn.Linear(d_model, 1),
+            nn.Softmax(dim=1)
+        )
+        
+        # Direction prediction head (4-layer MLP)
+        self.direction_head = nn.Sequential(
+            nn.Linear(d_model, 256),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, 128),
+            nn.GELU(), 
+            nn.Dropout(dropout),
+            nn.Linear(128, 64),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 2)  # Binary: 0=SHORT, 1=LONG
+        )
+        
+    def forward(self, x):
+        # x: (batch_size, seq_len, input_dim)
+        batch_size, seq_len, _ = x.shape
+        
+        # Input projection and positional encoding
+        x = self.input_projection(x)
+        x = self.pos_encoding(x)
+        
+        # Pass through transformer layers
+        for layer in self.transformer_layers:
+            x, _ = layer(x)
+        
+        # Attention pooling to get sequence representation
+        attention_weights = self.attention_pooling(x)  # (batch_size, seq_len, 1)
+        pooled = torch.sum(x * attention_weights, dim=1)  # (batch_size, d_model)
+        
+        # Direction prediction
+        direction_logits = self.direction_head(pooled)
+        
+        return {
+            'direction': direction_logits,
+            'attention_weights': attention_weights
+        }
+
+logger.info("[AI] Model architectures embedded successfully")
 
 class COMClient:
     def __init__(self, base_url: str, api_key: str, secret_key: str):
@@ -424,39 +583,48 @@ class AdvancedFeatureEngine:
             # Use the EXACT feature columns the model was trained on
             if hasattr(self, 'feature_cols') and self.feature_cols:
                 model_feature_cols = self.feature_cols
-                logger.info(f"[DEBUG] Model expects {len(model_feature_cols)} features")
-                
-                # Get last 60 rows for sequence (like backtester)
-                sequence_data = df.tail(60).copy()
-                
-                # Create feature matrix with ONLY the features the model expects
-                feature_matrix = np.zeros((60, len(model_feature_cols)))
-                
-                for i, col in enumerate(model_feature_cols):
-                    if col in sequence_data.columns:
-                        feature_matrix[:, i] = sequence_data[col].fillna(0.0).values
-                    else:
-                        feature_matrix[:, i] = 0.0  # Missing features as zeros
-                
-                # Apply the saved scaler (transform the entire sequence)
-                if hasattr(self, 'binary_scaler') and self.binary_scaler is not None:
-                    # Create DataFrame for scaler
-                    temp_df = pd.DataFrame(feature_matrix, columns=model_feature_cols)
-                    
-                    # Apply scaler directly (same as prepare_features does)
-                    features_scaled = self.binary_scaler.transform(temp_df[model_feature_cols])
-                    
-                    logger.info(f"[DEBUG] Used PROPER scaling on 60-timestep sequence")
-                    logger.info(f"[DEBUG] Sequence shape: {features_scaled.shape}")
-                    
-                    return features_scaled  # Return the full sequence (60, 38)
-                else:
-                    logger.error("[ERROR] No saved scaler available")
-                    return None
-                    
+                logger.info(f"[DEBUG] Model expects {len(model_feature_cols)} features from checkpoint")
             else:
-                logger.error("[ERROR] No feature columns available")
-                return None
+                # Fallback to hardcoded feature columns (38 features for binary model)
+                model_feature_cols = [
+                    "open", "high", "low", "close", "volume", "quote_volume",
+                    "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
+                    "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
+                    "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
+                    "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
+                    "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
+                    "minute_sin", "minute_cos", "day_sin", "day_cos"
+                ]  # 37 features (38 with ts, but we don't include ts in feature matrix)
+                logger.info(f"[DEBUG] Using hardcoded {len(model_feature_cols)} features (fallback)")
+            
+            # Get last 60 rows for sequence (like backtester)
+            sequence_data = df.tail(60).copy()
+            
+            # Create feature matrix with ONLY the features the model expects
+            feature_matrix = np.zeros((60, len(model_feature_cols)))
+            
+            for i, col in enumerate(model_feature_cols):
+                if col in sequence_data.columns:
+                    feature_matrix[:, i] = sequence_data[col].fillna(0.0).values
+                else:
+                    logger.warning(f"[WARNING] Missing feature column: {col}")
+                    feature_matrix[:, i] = 0.0  # Missing features as zeros
+            
+            # Apply the saved scaler (transform the entire sequence)
+            if hasattr(self, 'binary_scaler') and self.binary_scaler is not None:
+                # Create DataFrame for scaler
+                temp_df = pd.DataFrame(feature_matrix, columns=model_feature_cols)
+                
+                # Apply scaler directly (same as prepare_features does)
+                features_scaled = self.binary_scaler.transform(temp_df[model_feature_cols])
+                
+                logger.info(f"[DEBUG] Used PROPER scaling on 60-timestep sequence")
+                logger.info(f"[DEBUG] Sequence shape: {features_scaled.shape}")
+                
+                return features_scaled  # Return the full sequence (60, 38)
+            else:
+                logger.warning("[WARNING] No binary scaler available, using raw features")
+                return feature_matrix
             
         except Exception as e:
             logger.error(f"[ERROR] Binary feature extraction failed: {e}")

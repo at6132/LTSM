@@ -747,7 +747,7 @@ class AdvancedFeatureEngine:
             
             # Apply preprocessing to the DataFrame FIRST (EXACT match with checkpoint features)
             # Based on debug output, the checkpoint uses these features:
-            volume_features = ['volume', 'quote_volume', 'CVD']  # Only the volume features that actually exist in checkpoint
+            volume_features = ['volume', 'quote_volume', 'CVD']  # Only actual volume features from checkpoint
             
             # Apply EXACT same preprocessing as backtester/training
             for col in sequence_data.columns:
@@ -783,16 +783,15 @@ class AdvancedFeatureEngine:
                 
                 logger.info(f"[DEBUG] Pre-scaler stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
                 
-                # DEBUG: Identify which feature has large values AFTER scaling
-                # Check position 23 specifically (where large values appear)
-                if len(model_feature_cols) > 23:
-                    feature_23_name = model_feature_cols[23]
-                    feature_23_max = temp_df.iloc[:, 23].max()
-                    logger.warning(f"[DEBUG] Feature at position 23: '{feature_23_name}' = {feature_23_max:.1f}")
-                    
-                # Also log the actual feature list being used
-                logger.warning(f"[DEBUG] Feature list (first 10): {model_feature_cols[:10]}")
-                logger.warning(f"[DEBUG] Feature list (positions 20-30): {model_feature_cols[20:30] if len(model_feature_cols) > 30 else model_feature_cols[20:]}")
+                # DEBUG: Find ALL features with large values (potential scaling issues)
+                max_vals = temp_df.max()
+                large_features = max_vals[max_vals > 1000]
+                if len(large_features) > 0:
+                    logger.warning(f"[DEBUG] Features with values > 1000 (potential scaling issues):")
+                    for feat, val in large_features.items():
+                        logger.warning(f"[DEBUG]   '{feat}': max={val:.1f}")
+                else:
+                    logger.info(f"[DEBUG] No features with values > 1000 - preprocessing looks good!")
                 
                 # Apply saved RobustScaler (on already preprocessed data)
                 features_robust_scaled = self.binary_robust_scaler.transform(temp_df[model_feature_cols])

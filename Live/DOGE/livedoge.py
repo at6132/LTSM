@@ -741,57 +741,55 @@ class AdvancedFeatureEngine:
                 ]  # 37 base features + y_actionable = 38 total
                 logger.info(f"[DEBUG] Using hardcoded {len(model_feature_cols)} features (fallback)")
             
+            # STEP 1: Apply EXACT same preprocessing as backtester BEFORE creating feature matrix
             # Get last 60 rows for sequence (like backtester)
             sequence_data = df.tail(60).copy()
             
-            # Create feature matrix with ONLY the features the model expects
+            # Apply preprocessing to the DataFrame FIRST (EXACT match with backtester)
+            volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                              'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
+            
+            # Apply EXACT same preprocessing as backtester/training
+            for col in sequence_data.columns:
+                if col in volume_features:
+                    # Scale volume features to millions (EXACT same as training)
+                    sequence_data[col] = sequence_data[col] / 1e6
+                elif sequence_data[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                    # Clip outliers using percentiles (EXACT same as training)
+                    p1, p99 = np.percentile(sequence_data[col], [1, 99])
+                    sequence_data[col] = sequence_data[col].clip(p1, p99)
+            
+            # Fill NaN values (EXACT same as backtester)
+            sequence_data = sequence_data.fillna(method='ffill').fillna(0)
+            
+            # STEP 2: Create feature matrix from PREPROCESSED data
             feature_matrix = np.zeros((60, len(model_feature_cols)))
             
             for i, col in enumerate(model_feature_cols):
                 if col == "y_actionable":
-                    # Always set y_actionable to 0 for binary model input (as you mentioned)
+                    # Always set y_actionable to 0 for binary model input
                     feature_matrix[:, i] = 0.0
                 elif col in sequence_data.columns:
-                    feature_matrix[:, i] = sequence_data[col].fillna(0.0).values
+                    feature_matrix[:, i] = sequence_data[col].values
                 else:
                     logger.warning(f"[WARNING] Missing feature column: {col}")
                     feature_matrix[:, i] = 0.0  # Missing features as zeros
             
-            # Apply the EXACT same preprocessing as training (prepare_features)
+            # STEP 3: Apply scalers to preprocessed features
             if (hasattr(self, 'binary_robust_scaler') and self.binary_robust_scaler is not None and
                 hasattr(self, 'binary_standard_scaler') and self.binary_standard_scaler is not None):
-                # Create DataFrame for preprocessing
+                # Create DataFrame for scaler application
                 temp_df = pd.DataFrame(feature_matrix, columns=model_feature_cols)
                 
-                # STEP 1: Apply EXACT same preprocessing as train_baseline.prepare_features
-                # EXACT same volume features as training (train_baseline.py line 829-830)
-                volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
-                                  'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
+                logger.info(f"[DEBUG] Pre-scaler stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
                 
-                for col in temp_df.columns:
-                    if col in volume_features:
-                        # Scale volume features to millions (EXACT same as training)
-                        temp_df[col] = temp_df[col] / 1e6
-                        logger.info(f"[DEBUG] Scaled {col} by 1e6")
-                    elif temp_df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                        # Clip outliers using percentiles (EXACT same as training)
-                        p1, p99 = np.percentile(temp_df[col], [1, 99])
-                        temp_df[col] = temp_df[col].clip(p1, p99)
-                        logger.info(f"[DEBUG] Clipped {col} outliers: p1={p1:.3f}, p99={p99:.3f}")
-                
-                logger.info(f"[DEBUG] After preprocessing - stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
-                
-                # STEP 2: Apply saved RobustScaler (now on properly preprocessed data)
+                # Apply saved RobustScaler (on already preprocessed data)
                 features_robust_scaled = self.binary_robust_scaler.transform(temp_df[model_feature_cols])
                 logger.info(f"[DEBUG] Applied RobustScaler - stats: min={features_robust_scaled.min():.6f}, max={features_robust_scaled.max():.6f}, mean={features_robust_scaled.mean():.6f}")
                 
-                # STEP 3: Apply saved StandardScaler (CRITICAL - was missing!)
+                # Apply saved StandardScaler
                 features_final = self.binary_standard_scaler.transform(features_robust_scaled)
                 logger.info(f"[DEBUG] Applied StandardScaler - stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
-                
-                logger.info(f"[DEBUG] Used EXACT training preprocessing + scaling on 60-timestep sequence")
-                logger.info(f"[DEBUG] Final sequence shape: {features_final.shape}")
-                logger.info(f"[DEBUG] Final features stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
                 
                 return features_final  # Return the full sequence (60, 38)
             else:

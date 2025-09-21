@@ -417,24 +417,30 @@ class ModelInference:
         self.directional_model = self.load_model(directional_model_path)
         
         # Load scalers and feature info from binary model
-        self.binary_scaler = None
+        self.binary_robust_scaler = None
+        self.binary_standard_scaler = None
         self.directional_scaler = None
         self.feature_cols = None
         
         if self.binary_model:
             try:
                 binary_checkpoint = torch.load(binary_model_path, map_location=self.device, weights_only=False)
-                self.binary_scaler = binary_checkpoint.get('robust_scaler')
+                self.binary_robust_scaler = binary_checkpoint.get('robust_scaler')
+                self.binary_standard_scaler = binary_checkpoint.get('standard_scaler')
                 self.feature_cols = binary_checkpoint.get('feature_cols', [])
                 logger.info(f"[AI] Binary model loaded with {len(self.feature_cols)} features")
-                logger.info(f"[DEBUG] Binary scaler loaded: {self.binary_scaler is not None}")
-                if self.binary_scaler:
-                    logger.info(f"[DEBUG] Scaler type: {type(self.binary_scaler)}")
+                logger.info(f"[DEBUG] Binary robust scaler loaded: {self.binary_robust_scaler is not None}")
+                logger.info(f"[DEBUG] Binary standard scaler loaded: {self.binary_standard_scaler is not None}")
+                if self.binary_robust_scaler:
+                    logger.info(f"[DEBUG] Robust scaler type: {type(self.binary_robust_scaler)}")
+                if self.binary_standard_scaler:
+                    logger.info(f"[DEBUG] Standard scaler type: {type(self.binary_standard_scaler)}")
             except Exception as e:
                 logger.error(f"[ERROR] Failed to load binary scalers: {e}")
         
         # Store for later use by feature engine
-        self.binary_scaler_loaded = self.binary_scaler
+        self.binary_robust_scaler_loaded = self.binary_robust_scaler
+        self.binary_standard_scaler_loaded = self.binary_standard_scaler
         self.feature_cols_loaded = self.feature_cols
         
         logger.info(f"[AI] Models loaded on device: {self.device}")
@@ -752,7 +758,8 @@ class AdvancedFeatureEngine:
                     feature_matrix[:, i] = 0.0  # Missing features as zeros
             
             # Apply the EXACT same preprocessing as training (prepare_features)
-            if hasattr(self, 'binary_scaler') and self.binary_scaler is not None:
+            if (hasattr(self, 'binary_robust_scaler') and self.binary_robust_scaler is not None and
+                hasattr(self, 'binary_standard_scaler') and self.binary_standard_scaler is not None):
                 # Create DataFrame for preprocessing
                 temp_df = pd.DataFrame(feature_matrix, columns=model_feature_cols)
                 
@@ -774,15 +781,20 @@ class AdvancedFeatureEngine:
                 logger.info(f"[DEBUG] After preprocessing - stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
                 
                 # STEP 2: Apply saved RobustScaler (now on properly preprocessed data)
-                features_scaled = self.binary_scaler.transform(temp_df[model_feature_cols])
+                features_robust_scaled = self.binary_robust_scaler.transform(temp_df[model_feature_cols])
+                logger.info(f"[DEBUG] Applied RobustScaler - stats: min={features_robust_scaled.min():.6f}, max={features_robust_scaled.max():.6f}, mean={features_robust_scaled.mean():.6f}")
+                
+                # STEP 3: Apply saved StandardScaler (CRITICAL - was missing!)
+                features_final = self.binary_standard_scaler.transform(features_robust_scaled)
+                logger.info(f"[DEBUG] Applied StandardScaler - stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
                 
                 logger.info(f"[DEBUG] Used EXACT training preprocessing + scaling on 60-timestep sequence")
-                logger.info(f"[DEBUG] Final sequence shape: {features_scaled.shape}")
-                logger.info(f"[DEBUG] Final features stats: min={features_scaled.min():.6f}, max={features_scaled.max():.6f}, mean={features_scaled.mean():.6f}")
+                logger.info(f"[DEBUG] Final sequence shape: {features_final.shape}")
+                logger.info(f"[DEBUG] Final features stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
                 
-                return features_scaled  # Return the full sequence (60, 38)
+                return features_final  # Return the full sequence (60, 38)
             else:
-                logger.warning("[WARNING] No binary scaler available, using raw features")
+                logger.warning("[WARNING] Binary scalers not available (need both RobustScaler and StandardScaler), using raw features")
                 return feature_matrix
             
         except Exception as e:
@@ -905,8 +917,9 @@ class LiveDOGETrader:
         self.feature_engine = AdvancedFeatureEngine(sequence_length=config["sequence_length"])
         self.position_manager = PositionManager(self.com_client)
         
-        # Pass the binary scaler and feature columns to feature engine
-        self.feature_engine.binary_scaler = getattr(self.model_inference, 'binary_scaler_loaded', None)
+        # Pass both binary scalers and feature columns to feature engine
+        self.feature_engine.binary_robust_scaler = getattr(self.model_inference, 'binary_robust_scaler_loaded', None)
+        self.feature_engine.binary_standard_scaler = getattr(self.model_inference, 'binary_standard_scaler_loaded', None)
         self.feature_engine.feature_cols = getattr(self.model_inference, 'feature_cols_loaded', [])
         
         self.symbol = config["symbol"]

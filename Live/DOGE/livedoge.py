@@ -764,8 +764,9 @@ class AdvancedFeatureEngine:
                 temp_df = pd.DataFrame(feature_matrix, columns=model_feature_cols)
                 
                 # STEP 1: Apply EXACT same preprocessing as train_baseline.prepare_features
+                # EXACT same volume features as training (train_baseline.py line 829-830)
                 volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
-                                  'mean_size', 'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
+                                  'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
                 
                 for col in temp_df.columns:
                     if col in volume_features:

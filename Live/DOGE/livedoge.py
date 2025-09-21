@@ -754,6 +754,17 @@ class AdvancedFeatureEngine:
                 if col in volume_features:
                     # Scale volume features to millions (EXACT same as training)
                     sequence_data[col] = sequence_data[col] / 1e6
+                elif col == 'impact_proxy':
+                    # DEBUG: Check what's causing extreme impact_proxy values
+                    max_impact = sequence_data[col].max()
+                    if max_impact > 1000:
+                        max_idx = sequence_data[col].idxmax()
+                        r1_val = sequence_data.loc[max_idx, 'r1'] if 'r1' in sequence_data.columns else 'N/A'
+                        volume_val = sequence_data.loc[max_idx, 'volume'] if 'volume' in sequence_data.columns else 'N/A'
+                        logger.warning(f"[DEBUG] Extreme impact_proxy={max_impact:.1f} caused by r1={r1_val}, volume={volume_val}")
+                    # Apply normal outlier clipping like other features
+                    p1, p99 = np.percentile(sequence_data[col], [1, 99])
+                    sequence_data[col] = sequence_data[col].clip(p1, p99)
                 elif sequence_data[col].dtype in ['float64', 'float32', 'int64', 'int32']:
                     # Clip outliers using percentiles (EXACT same as training)
                     p1, p99 = np.percentile(sequence_data[col], [1, 99])

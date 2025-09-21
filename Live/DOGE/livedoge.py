@@ -783,6 +783,14 @@ class AdvancedFeatureEngine:
                 
                 logger.info(f"[DEBUG] Pre-scaler stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
                 
+                # DEBUG: Identify which feature has large values
+                max_vals = temp_df.max()
+                large_features = max_vals[max_vals > 1000]
+                if len(large_features) > 0:
+                    logger.warning(f"[DEBUG] Large unscaled features detected:")
+                    for feat, val in large_features.items():
+                        logger.warning(f"[DEBUG]   {feat}: max={val:.1f}")
+                
                 # Apply saved RobustScaler (on already preprocessed data)
                 features_robust_scaled = self.binary_robust_scaler.transform(temp_df[model_feature_cols])
                 logger.info(f"[DEBUG] Applied RobustScaler - stats: min={features_robust_scaled.min():.6f}, max={features_robust_scaled.max():.6f}, mean={features_robust_scaled.mean():.6f}")

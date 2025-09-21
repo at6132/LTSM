@@ -747,7 +747,7 @@ class AdvancedFeatureEngine:
             
             # Apply preprocessing to the DataFrame FIRST (EXACT match with checkpoint features)
             # Based on debug output, the checkpoint uses these features:
-            volume_features = ['volume', 'quote_volume', 'CVD']  # Only actual volume features from checkpoint
+            volume_features = ['volume', 'quote_volume', 'CVD', 'buy_vol', 'sell_vol']  # All volume features from checkpoint
             
             # Apply EXACT same preprocessing as backtester/training
             for col in sequence_data.columns:

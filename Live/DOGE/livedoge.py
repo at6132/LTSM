@@ -301,7 +301,7 @@ class COMClient:
         
         payload = {
             "idempotency_key": f"LTSM_v1_{timestamp}_{symbol}_{side}_{int(time.time() * 1000000) % 1000000}",
-            "environment": {"sandbox": True},  # PAPER TRADING
+            "environment": {"sandbox": False},  # LIVE TRADING
             "source": {
                 "strategy_id": "LTSM",
                 "instance_id": "instance_001", 
@@ -386,15 +386,15 @@ class COMClient:
         
         try:
             url = f"{self.base_url}{path}"
-            logger.info(f"[COM] Sending PAPER TRADE order: {order_type} {side} {symbol}")
+            logger.info(f"[COM] Sending LIVE TRADE order: {order_type} {side} {symbol}")
             response = self.session.post(url, json=payload, headers=headers, timeout=10)
             
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"[SUCCESS] PAPER ORDER created: {result}")
+                logger.info(f"[SUCCESS] LIVE ORDER created: {result}")
                 return result
             else:
-                logger.error(f"[ERROR] PAPER ORDER failed: {response.status_code} - {response.text}")
+                logger.error(f"[ERROR] LIVE ORDER failed: {response.status_code} - {response.text}")
                 return {"error": response.text}
         except Exception as e:
             logger.error(f"[ERROR] COM request failed: {e}")
@@ -744,16 +744,34 @@ class AdvancedFeatureEngine:
                     logger.warning(f"[WARNING] Missing feature column: {col}")
                     feature_matrix[:, i] = 0.0  # Missing features as zeros
             
-            # Apply the saved scaler (transform the entire sequence)
+            # Apply the EXACT same preprocessing as training (prepare_features)
             if hasattr(self, 'binary_scaler') and self.binary_scaler is not None:
-                # Create DataFrame for scaler
+                # Create DataFrame for preprocessing
                 temp_df = pd.DataFrame(feature_matrix, columns=model_feature_cols)
                 
-                # Apply scaler directly (same as prepare_features does)
+                # STEP 1: Apply EXACT same preprocessing as train_baseline.prepare_features
+                volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                                  'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
+                
+                for col in temp_df.columns:
+                    if col in volume_features:
+                        # Scale volume features to millions (EXACT same as training)
+                        temp_df[col] = temp_df[col] / 1e6
+                        logger.info(f"[DEBUG] Scaled {col} by 1e6")
+                    elif temp_df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                        # Clip outliers using percentiles (EXACT same as training)
+                        p1, p99 = np.percentile(temp_df[col], [1, 99])
+                        temp_df[col] = temp_df[col].clip(p1, p99)
+                        logger.info(f"[DEBUG] Clipped {col} outliers: p1={p1:.3f}, p99={p99:.3f}")
+                
+                logger.info(f"[DEBUG] After preprocessing - stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
+                
+                # STEP 2: Apply saved RobustScaler (now on properly preprocessed data)
                 features_scaled = self.binary_scaler.transform(temp_df[model_feature_cols])
                 
-                logger.info(f"[DEBUG] Used PROPER scaling on 60-timestep sequence")
-                logger.info(f"[DEBUG] Sequence shape: {features_scaled.shape}")
+                logger.info(f"[DEBUG] Used EXACT training preprocessing + scaling on 60-timestep sequence")
+                logger.info(f"[DEBUG] Final sequence shape: {features_scaled.shape}")
+                logger.info(f"[DEBUG] Final features stats: min={features_scaled.min():.6f}, max={features_scaled.max():.6f}, mean={features_scaled.mean():.6f}")
                 
                 return features_scaled  # Return the full sequence (60, 38)
             else:
@@ -812,15 +830,15 @@ class PositionManager:
         
     def open_position(self, symbol: str, side: str, current_price: float) -> Optional[str]:
         try:
-            # Create market entry order (PAPER TRADE)
-            logger.info(f"[COM] Sending PAPER TRADE market order: {side} {symbol}")
+            # Create market entry order (LIVE TRADE)
+            logger.info(f"[COM] Sending LIVE TRADE market order: {side} {symbol}")
             order_response = self.com_client.create_order(symbol, side, "MARKET")
             
             if "error" in order_response:
-                logger.error(f"[ERROR] Failed to open PAPER position: {order_response['error']}")
+                logger.error(f"[ERROR] Failed to open LIVE position: {order_response['error']}")
                 return None
             
-            position_ref = order_response.get("position_ref", f"demo_pos_{int(time.time())}")
+            position_ref = order_response.get("position_ref", f"live_pos_{int(time.time())}")
             
             # Calculate TP price (0.35% away)
             tp_multiplier = 1.0035 if side == "BUY" else 0.9965
@@ -828,7 +846,7 @@ class PositionManager:
             
             # Create TP order (post-only limit order)
             tp_side = "SELL" if side == "BUY" else "BUY"
-            logger.info(f"[COM] Sending PAPER TRADE TP order: {tp_side} {symbol} @ {tp_price:.6f}")
+            logger.info(f"[COM] Sending LIVE TRADE TP order: {tp_side} {symbol} @ {tp_price:.6f}")
             tp_response = self.com_client.create_order(symbol, tp_side, "LIMIT", tp_price)
             
             # Store position info
@@ -841,7 +859,7 @@ class PositionManager:
                 "status": "OPEN"
             }
             
-            logger.info(f"[POSITION] PAPER TRADE OPENED: {side} {symbol} @ {current_price:.6f}, TP: {tp_price:.6f}")
+            logger.info(f"[POSITION] LIVE TRADE OPENED: {side} {symbol} @ {current_price:.6f}, TP: {tp_price:.6f}")
             return position_ref
             
         except Exception as e:
@@ -890,11 +908,11 @@ class LiveDOGETrader:
         self.running = False
         self.last_candle_time = None
         
-        logger.info("[START] LiveDOGETrader initialized with PAPER TRADING")
+        logger.info("[START] LiveDOGETrader initialized with LIVE TRADING")
     
     async def run(self):
         self.running = True
-        logger.info("[SIGNAL] Starting live PAPER trading...")
+        logger.info("[SIGNAL] Starting live LIVE trading...")
         
         while self.running:
             try:
@@ -926,7 +944,7 @@ class LiveDOGETrader:
                 logger.error(f"[ERROR] Error in main loop: {e}")
                 await asyncio.sleep(30)
         
-        logger.info("[FINISH] PAPER trading stopped")
+        logger.info("[FINISH] LIVE trading stopped")
     
     async def process_new_candle(self):
         """Process each new candle with full feature window"""
@@ -984,16 +1002,16 @@ class LiveDOGETrader:
             logger.info(f"[SIGNAL] SL Level: ${sl_price:.6f} (-2.00%)")
             logger.info(f"[SIGNAL] Move Confidence: {move_confidence:.1%}")
             logger.info(f"[SIGNAL] Direction Confidence: {direction_confidence:.1%}")
-            logger.info(f"[SIGNAL] Trade Type: PAPER TRADE")
+            logger.info(f"[SIGNAL] Trade Type: LIVE TRADE")
             logger.info("[SIGNAL] ========================")
             
-            # Execute PAPER trade
+            # Execute LIVE trade
             position_id = self.position_manager.open_position(self.symbol, direction, current_price)
             
             if position_id:
-                logger.info(f"[SUCCESS] PAPER position opened: {position_id}")
+                logger.info(f"[SUCCESS] LIVE position opened: {position_id}")
             else:
-                logger.error("[ERROR] Failed to open PAPER position")
+                logger.error("[ERROR] Failed to open LIVE position")
                 
         except Exception as e:
             logger.error(f"[ERROR] Error processing new candle: {e}")
@@ -1019,7 +1037,7 @@ def load_config() -> Dict:
     }
 
 async def main():
-    logger.info("[START] Starting Live DOGE PAPER Trader")
+    logger.info("[START] Starting Live DOGE LIVE Trader")
     
     config = load_config()
     trader = LiveDOGETrader(config)

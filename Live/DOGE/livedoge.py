@@ -656,6 +656,120 @@ class AdvancedFeatureEngine:
             logger.error(f"[ERROR] Feature calculation failed: {e}")
             return df
     
+    def _calculate_trade_features(self, ohlcv_df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate real trade features from aggregate trades data"""
+        try:
+            if len(self.trades_buffer) == 0:
+                logger.warning("[WARNING] No trade data available, using dummy values")
+                # Fallback to dummy values
+                ohlcv_df["buy_vol"] = ohlcv_df["volume"] * 0.5
+                ohlcv_df["sell_vol"] = ohlcv_df["volume"] * 0.5
+                ohlcv_df["tot_vol"] = ohlcv_df["volume"]
+                ohlcv_df["mean_size"] = ohlcv_df["volume"] / 100
+                ohlcv_df["max_size"] = ohlcv_df["volume"] / 50
+                ohlcv_df["p95_size"] = ohlcv_df["volume"] / 60
+                ohlcv_df["n_trades"] = 100.0
+                ohlcv_df["signed_vol"] = 0.0
+                ohlcv_df["imb_aggr"] = 0.0
+                ohlcv_df["dCVD"] = 0.0
+                ohlcv_df["CVD"] = 0.0
+                ohlcv_df["signed_volatility"] = 0.0
+                ohlcv_df["block_trades"] = 0.0
+                return ohlcv_df
+            
+            # Process each OHLCV candle
+            for idx, candle in ohlcv_df.iterrows():
+                candle_start = candle['datetime']
+                candle_end = candle_start + pd.Timedelta(minutes=1)
+                
+                # Get trades for this candle
+                candle_trades = self.trades_buffer[
+                    (self.trades_buffer['datetime'] >= candle_start) & 
+                    (self.trades_buffer['datetime'] < candle_end)
+                ].copy()
+                
+                if len(candle_trades) == 0:
+                    # No trades for this candle - use defaults
+                    ohlcv_df.loc[idx, "buy_vol"] = candle["volume"] * 0.5
+                    ohlcv_df.loc[idx, "sell_vol"] = candle["volume"] * 0.5
+                    ohlcv_df.loc[idx, "tot_vol"] = candle["volume"]
+                    ohlcv_df.loc[idx, "mean_size"] = candle["volume"] / 100
+                    ohlcv_df.loc[idx, "max_size"] = candle["volume"] / 50
+                    ohlcv_df.loc[idx, "p95_size"] = candle["volume"] / 60
+                    ohlcv_df.loc[idx, "n_trades"] = 100.0
+                    ohlcv_df.loc[idx, "signed_vol"] = 0.0
+                    ohlcv_df.loc[idx, "imb_aggr"] = 0.0
+                    continue
+                
+                # Calculate real trade features
+                candle_trades['volume'] = candle_trades['Quantity']
+                
+                # Buy vs Sell volume (IsBuyerMaker=True means SELL, False means BUY)
+                buy_trades = candle_trades[candle_trades['IsBuyerMaker'] == False]
+                sell_trades = candle_trades[candle_trades['IsBuyerMaker'] == True]
+                
+                buy_vol = buy_trades['volume'].sum()
+                sell_vol = sell_trades['volume'].sum()
+                tot_vol = candle_trades['volume'].sum()
+                
+                # Trade size statistics
+                trade_sizes = candle_trades['volume']
+                mean_size = trade_sizes.mean() if len(trade_sizes) > 0 else candle["volume"] / 100
+                max_size = trade_sizes.max() if len(trade_sizes) > 0 else candle["volume"] / 50
+                p95_size = trade_sizes.quantile(0.95) if len(trade_sizes) > 0 else candle["volume"] / 60
+                n_trades = len(candle_trades)
+                
+                # Signed volume (buy - sell)
+                signed_vol = buy_vol - sell_vol
+                
+                # Imbalance aggression
+                imb_aggr = signed_vol / (tot_vol + 1e-9)
+                
+                # Block trades (large trades)
+                block_threshold = mean_size * 5 if mean_size > 0 else candle["volume"] / 20
+                block_trades = (trade_sizes > block_threshold).sum()
+                
+                # Store calculated features
+                ohlcv_df.loc[idx, "buy_vol"] = buy_vol
+                ohlcv_df.loc[idx, "sell_vol"] = sell_vol
+                ohlcv_df.loc[idx, "tot_vol"] = tot_vol
+                ohlcv_df.loc[idx, "mean_size"] = mean_size
+                ohlcv_df.loc[idx, "max_size"] = max_size
+                ohlcv_df.loc[idx, "p95_size"] = p95_size
+                ohlcv_df.loc[idx, "n_trades"] = n_trades
+                ohlcv_df.loc[idx, "signed_vol"] = signed_vol
+                ohlcv_df.loc[idx, "imb_aggr"] = imb_aggr
+                ohlcv_df.loc[idx, "block_trades"] = block_trades
+            
+            # Calculate CVD (Cumulative Volume Delta) and dCVD
+            ohlcv_df["CVD"] = ohlcv_df["signed_vol"].cumsum()
+            ohlcv_df["dCVD"] = ohlcv_df["signed_vol"].diff().fillna(0)
+            
+            # Signed volatility (rolling std of signed volume)
+            ohlcv_df["signed_volatility"] = ohlcv_df["signed_vol"].rolling(20).std().fillna(0)
+            
+            logger.info(f"[TRADES] Calculated real trade features from {len(self.trades_buffer)} trades")
+            
+            return ohlcv_df
+            
+        except Exception as e:
+            logger.error(f"[ERROR] Trade feature calculation failed: {e}")
+            # Fallback to dummy values
+            ohlcv_df["buy_vol"] = ohlcv_df["volume"] * 0.5
+            ohlcv_df["sell_vol"] = ohlcv_df["volume"] * 0.5
+            ohlcv_df["tot_vol"] = ohlcv_df["volume"]
+            ohlcv_df["mean_size"] = ohlcv_df["volume"] / 100
+            ohlcv_df["max_size"] = ohlcv_df["volume"] / 50
+            ohlcv_df["p95_size"] = ohlcv_df["volume"] / 60
+            ohlcv_df["n_trades"] = 100.0
+            ohlcv_df["signed_vol"] = 0.0
+            ohlcv_df["imb_aggr"] = 0.0
+            ohlcv_df["dCVD"] = 0.0
+            ohlcv_df["CVD"] = 0.0
+            ohlcv_df["signed_volatility"] = 0.0
+            ohlcv_df["block_trades"] = 0.0
+            return ohlcv_df
+    
     def get_binary_features(self) -> Optional[np.ndarray]:
         """Get features for binary model using EXACT same method as backtester"""
         if len(self.ohlcv_buffer) < 90:  # Need enough data for feature calculation
@@ -683,20 +797,8 @@ class AdvancedFeatureEngine:
             df["vol_z"] = (df["volume"] - df["volume"].rolling(20).mean()) / (df["volume"].rolling(20).std() + 1e-9)
             df["avg_trade_size"] = df["volume"] / 100  # Simplified since we don't have trade count
             
-            # Trade features (simplified since we don't have full trade data)
-            df["buy_vol"] = df["volume"] * 0.5  # Assume 50/50 split
-            df["sell_vol"] = df["volume"] * 0.5
-            df["tot_vol"] = df["volume"]
-            df["mean_size"] = df["volume"] / 100
-            df["max_size"] = df["volume"] / 50
-            df["p95_size"] = df["volume"] / 60
-            df["n_trades"] = 100.0  # Estimated
-            df["signed_vol"] = 0.0  # Neutral
-            df["imb_aggr"] = 0.0  # Neutral
-            df["dCVD"] = 0.0
-            df["CVD"] = 0.0
-            df["signed_volatility"] = 0.0
-            df["block_trades"] = 0.0
+            # Calculate REAL trade features from aggregate trades data
+            df = self._calculate_trade_features(df)
             df["impact_proxy"] = abs(df["r1"]) / (df["volume"] + 1e-9)
             df["vw_tick_return"] = 0.0
             df["vol_regime"] = 1.0  # Medium regime
@@ -747,7 +849,8 @@ class AdvancedFeatureEngine:
             
             # Apply preprocessing to the DataFrame FIRST (EXACT match with checkpoint features)
             # Based on debug output, the checkpoint uses these features:
-            volume_features = ['volume', 'quote_volume', 'CVD', 'buy_vol', 'sell_vol']  # All volume features from checkpoint
+            volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                              'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD', 'signed_volatility']  # Complete list
             
             # Apply EXACT same preprocessing as backtester/training
             for col in sequence_data.columns:
@@ -780,6 +883,10 @@ class AdvancedFeatureEngine:
                 if col == "y_actionable":
                     # Always set y_actionable to 0 for binary model input
                     feature_matrix[:, i] = 0.0
+                elif col == "impact_proxy":
+                    # Set impact_proxy to 0 to match training data (training had ~0 values with ~0 variance)
+                    feature_matrix[:, i] = 0.0
+                    logger.info(f"[DEBUG] Set impact_proxy to 0 to match training distribution (training had ~0 variance)")
                 elif col in sequence_data.columns:
                     feature_matrix[:, i] = sequence_data[col].values
                 else:
@@ -803,6 +910,11 @@ class AdvancedFeatureEngine:
                         logger.warning(f"[DEBUG]   '{feat}': max={val:.1f}")
                 else:
                     logger.info(f"[DEBUG] No features with values > 1000 - preprocessing looks good!")
+                
+                # DEBUG: Show impact_proxy distribution before scaling
+                if 'impact_proxy' in temp_df.columns:
+                    impact_vals = temp_df['impact_proxy']
+                    logger.warning(f"[DEBUG] impact_proxy before scaling: min={impact_vals.min():.6f}, max={impact_vals.max():.6f}, mean={impact_vals.mean():.6f}, median={impact_vals.median():.6f}")
                 
                 # Apply saved RobustScaler (on already preprocessed data)
                 features_robust_scaled = self.binary_robust_scaler.transform(temp_df[model_feature_cols])

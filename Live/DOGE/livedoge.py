@@ -15,8 +15,15 @@ from sklearn.preprocessing import RobustScaler
 import sys
 import os
 
-# Configure logging first
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+# Configure logging to both console and file
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(message)s',
+    handlers=[
+        logging.FileHandler('livedoge.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Add parent directories to path for imports
@@ -835,8 +842,11 @@ class PositionManager:
             order_response = self.com_client.create_order(symbol, side, "MARKET")
             
             if "error" in order_response:
-                logger.error(f"[ERROR] Failed to open LIVE position: {order_response['error']}")
+                logger.error(f"[❌ TRADE FAILED] Failed to open LIVE position: {order_response['error']} - BINARY MOVE WASTED!")
                 return None
+            
+            # *** SUCCESSFUL TRADE EXECUTION ***
+            logger.info(f"[🚀 TRADE SUCCESS] LIVE {side} order placed successfully! Binary->Directional->Trade COMPLETE!")
             
             position_ref = order_response.get("position_ref", f"live_pos_{int(time.time())}")
             
@@ -969,10 +979,13 @@ class LiveDOGETrader:
                 logger.info("[DATA] No move predicted for this candle")
                 return
             
+            # *** BINARY MOVE DETECTED ***
+            logger.info(f"[🎯 BINARY MOVE DETECTED] Confidence: {move_confidence:.3f} - Proceeding to directional analysis")
+            
             # Phase 2: Directional model with advanced features (232)
             directional_features = self.feature_engine.get_directional_features()
             if directional_features is None:
-                logger.warning("[WARNING] No directional features available")
+                logger.error("[❌ DIRECTIONAL FAILED] No directional features available - BINARY MOVE WASTED!")
                 return
             
             direction, direction_confidence = self.model_inference.predict_direction(directional_features)
@@ -980,13 +993,13 @@ class LiveDOGETrader:
             logger.info(f"[AI] Direction prediction: {direction} (confidence: {direction_confidence:.3f})")
             
             if direction == "HOLD":
-                logger.info("[DATA] No clear direction")
+                logger.warning("[❌ DIRECTIONAL FAILED] No clear direction - BINARY MOVE WASTED!")
                 return
             
             # Check position limits
             open_positions = self.position_manager.get_open_positions_count()
             if open_positions >= self.max_positions:
-                logger.info(f"[DATA] Max positions reached ({open_positions}/{self.max_positions})")
+                logger.warning(f"[❌ POSITION LIMIT] Max positions reached ({open_positions}/{self.max_positions}) - BINARY MOVE WASTED!")
                 return
             
             # Calculate TP and SL

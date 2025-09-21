@@ -745,9 +745,9 @@ class AdvancedFeatureEngine:
             # Get last 60 rows for sequence (like backtester)
             sequence_data = df.tail(60).copy()
             
-            # Apply preprocessing to the DataFrame FIRST (EXACT match with backtester)
-            volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
-                              'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
+            # Apply preprocessing to the DataFrame FIRST (EXACT match with checkpoint features)
+            # Based on debug output, the checkpoint uses these features:
+            volume_features = ['volume', 'quote_volume', 'CVD']  # Only the volume features that actually exist in checkpoint
             
             # Apply EXACT same preprocessing as backtester/training
             for col in sequence_data.columns:
@@ -797,6 +797,10 @@ class AdvancedFeatureEngine:
                 # Apply saved RobustScaler (on already preprocessed data)
                 features_robust_scaled = self.binary_robust_scaler.transform(temp_df[model_feature_cols])
                 logger.info(f"[DEBUG] Applied RobustScaler - stats: min={features_robust_scaled.min():.6f}, max={features_robust_scaled.max():.6f}, mean={features_robust_scaled.mean():.6f}")
+                
+                # DEBUG: Find which feature has the large value after RobustScaler
+                max_idx = np.unravel_index(np.argmax(features_robust_scaled), features_robust_scaled.shape)
+                logger.warning(f"[DEBUG] Largest value after RobustScaler: feature '{model_feature_cols[max_idx[1]]}' at position {max_idx[1]} = {features_robust_scaled[max_idx]:.1f}")
                 
                 # Apply saved StandardScaler
                 features_final = self.binary_standard_scaler.transform(features_robust_scaled)

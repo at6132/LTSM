@@ -853,6 +853,68 @@ def load_live_data() -> pd.DataFrame:
     # Fill NaN values
     df = df.fillna(method='ffill').fillna(0)
     
+    # ==== Advanced directional features to mirror training ====
+    # Returns with additional lags
+    df['r2'] = df['close'].pct_change(2)
+    df['r10'] = df['close'].pct_change(10)
+
+    # Range and body relative to previous close
+    prev_close = df['close'].shift(1)
+    df['range_pct'] = (df['high'] - df['low']) / (prev_close + 1e-9)
+    df['body_pct'] = (df['close'] - df['open']).abs() / (prev_close + 1e-9)
+
+    # ATR% (Wilder's ATR 14)
+    prev_close_fwd = df['close'].shift(1)
+    tr1 = df['high'] - df['low']
+    tr2 = (df['high'] - prev_close_fwd).abs()
+    tr3 = (df['low'] - prev_close_fwd).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr = tr.rolling(14, min_periods=1).mean()
+    df['atr_pct'] = atr / (df['close'] + 1e-9)
+
+    # Realized volatility within bar (approx using trades); fallback from returns if needed
+    if 'rv' not in df.columns:
+        df['rv'] = (df['r1']**2).rolling(5, min_periods=1).sum()
+
+    # Volume z-score and average trade size
+    vol_ma = df['volume'].rolling(20, min_periods=5).mean()
+    vol_sd = df['volume'].rolling(20, min_periods=5).std()
+    df['vol_z'] = (df['volume'] - vol_ma) / (vol_sd + 1e-9)
+    df['avg_trade_size'] = (df['tot_vol'] / (df['n_trades'].replace(0, np.nan))).fillna(0.0)
+
+    # Volatility regime: 0=low,1=med,2=high based on rolling sigma tertiles
+    roll_sigma = df['r1'].rolling(200, min_periods=50).std()
+    q1 = roll_sigma.quantile(0.33)
+    q2 = roll_sigma.quantile(0.66)
+    vol_regime = np.select([roll_sigma <= q1, roll_sigma <= q2], [0, 1], default=2)
+    df['vol_regime'] = vol_regime
+
+    # Drawdown state
+    rolling_max = df['close'].cummax()
+    df['drawdown'] = (df['close'] - rolling_max) / (rolling_max + 1e-9)
+
+    # Calendar encodings from ts
+    minute_of_day = df['ts'].dt.hour * 60 + df['ts'].dt.minute
+    day_of_week = df['ts'].dt.dayofweek
+    df['minute_sin'] = np.sin(2 * np.pi * minute_of_day / (24 * 60))
+    df['minute_cos'] = np.cos(2 * np.pi * minute_of_day / (24 * 60))
+    df['day_sin'] = np.sin(2 * np.pi * day_of_week / 7)
+    df['day_cos'] = np.cos(2 * np.pi * day_of_week / 7)
+
+    # Sessions by hour
+    hour = df['ts'].dt.hour
+    df['session_asia'] = ((hour >= 0) & (hour < 8)).astype(int)
+    df['session_europe'] = ((hour >= 8) & (hour < 16)).astype(int)
+    df['session_us'] = ((hour >= 16) & (hour < 24)).astype(int)
+
+    # Price position and volume concentration/entropy
+    df['price_position'] = (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-9)
+    df['vol_concentration'] = df['volume'] / (df['volume'].rolling(20, min_periods=5).mean() + 1e-9)
+    df['vol_entropy'] = -(df['vol_concentration']) * np.log(df['vol_concentration'] + 1e-12)
+
+    # Refill any NaNs created in advanced features
+    df = df.replace([np.inf, -np.inf], 0).fillna(0)
+
     # Apply same preprocessing as live script
     volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
                       'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD', 'signed_volatility']
@@ -900,7 +962,8 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
         'buy_vol': 0.0, 'sell_vol': 0.0, 'tot_vol': 0.0,
         'mean_size': 0.0, 'max_size': 0.0, 'p95_size': 0.0, 'n_trades': 0,
         'signed_vol': 0.0, 'imb_aggr': 0.0, 'block_trades': 0.0,
-        'CVD': 0.0, 'dCVD': 0.0, 'signed_volatility': 0.0, 'impact_proxy': 0.0
+        'CVD': 0.0, 'dCVD': 0.0, 'signed_volatility': 0.0, 'impact_proxy': 0.0,
+        'vw_tick_return': 0.0, 'rv': 0.0
     }
     
     for col in trade_features:
@@ -952,6 +1015,14 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
             else:
                 signed_volatility = 0.0
             
+            # Volume-weighted tick return (per bar)
+            tick_returns = candle_trades['price'].pct_change().fillna(0.0)
+            qty = candle_trades['quantity'].fillna(0.0)
+            vw_tick_return = (tick_returns * qty).sum() / (qty.sum() + 1e-9)
+
+            # Realized volatility (intra-trade) within the bar
+            rv = (tick_returns ** 2).sum()
+
             # Impact proxy (similar to live script calculation)
             r1 = candle['close'] / candle['open'] - 1 if candle['open'] > 0 else 0
             impact_proxy = abs(r1) / (tot_vol + 1e-9) if tot_vol > 0 else 0.0
@@ -971,6 +1042,8 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
             ohlcv_df.loc[idx, 'dCVD'] = dCVD
             ohlcv_df.loc[idx, 'signed_volatility'] = signed_volatility
             ohlcv_df.loc[idx, 'impact_proxy'] = impact_proxy
+            ohlcv_df.loc[idx, 'vw_tick_return'] = vw_tick_return
+            ohlcv_df.loc[idx, 'rv'] = rv
     
     print(f"✅ Trade features calculated for {len(ohlcv_df)} candles")
     return ohlcv_df

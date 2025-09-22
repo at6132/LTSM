@@ -542,6 +542,9 @@ class TwoPhaseBacktester:
         if missing_binary > 0:
             print(f"⚠️  Added {missing_binary} missing binary features as zeros")
         
+        # Store for final summary
+        self.missing_binary_features = missing_binary
+        
         # Use fresh scaling on recent data (same as labeling script)
         from train_baseline import prepare_features
         
@@ -624,6 +627,9 @@ class TwoPhaseBacktester:
                 
         if missing_count > 0:
             print(f"⚠️  Added {missing_count} missing directional features as zeros")
+        
+        # Store for final summary
+        self.missing_directional_features = missing_count
         
         # Apply same preprocessing as training
         volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
@@ -1551,6 +1557,24 @@ def main():
         print(f"\\n👌 POSITIVE PERFORMANCE! System is profitable but could be better!")
     else:
         print(f"\\n❌ NEGATIVE PERFORMANCE! System needs improvement!")
+    
+    # Final feature completeness summary
+    print(f"\\n🔍 FINAL FEATURE COMPLETENESS SUMMARY:")
+    if hasattr(backtester, 'missing_binary_features'):
+        if backtester.missing_binary_features == 0:
+            print(f"   ✅ Binary Model: ALL 38 features computed successfully (0 missing)")
+        else:
+            print(f"   ⚠️  Binary Model: {backtester.missing_binary_features} features missing out of 38")
+    else:
+        print(f"   ❓ Binary Model: Feature count not tracked")
+        
+    if hasattr(backtester, 'missing_directional_features'):
+        if backtester.missing_directional_features == 0:
+            print(f"   ✅ Directional Model: ALL 238 features computed successfully (0 missing)")
+        else:
+            print(f"   ⚠️  Directional Model: {backtester.missing_directional_features} features missing out of 238")
+    else:
+        print(f"   ❓ Directional Model: Feature count not tracked")
     
     return results
 

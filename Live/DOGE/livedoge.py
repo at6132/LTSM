@@ -950,117 +950,137 @@ class AdvancedFeatureEngine:
         return df
     
     def _calculate_trade_features(self, ohlcv_df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate real trade features from aggregate trades data"""
+        """Calculate trade features EXACTLY like backtester calculate_trade_features_for_backtest()"""
         try:
             if len(self.trades_buffer) == 0:
-                logger.warning("[WARNING] No trade data available, using dummy values")
-                # Fallback to dummy values
-                ohlcv_df["buy_vol"] = ohlcv_df["volume"] * 0.5
-                ohlcv_df["sell_vol"] = ohlcv_df["volume"] * 0.5
-                ohlcv_df["tot_vol"] = ohlcv_df["volume"]
-                ohlcv_df["mean_size"] = ohlcv_df["volume"] / 100
-                ohlcv_df["max_size"] = ohlcv_df["volume"] / 50
-                ohlcv_df["p95_size"] = ohlcv_df["volume"] / 60
-                ohlcv_df["n_trades"] = 100.0
-                ohlcv_df["signed_vol"] = 0.0
-                ohlcv_df["imb_aggr"] = 0.0
-                ohlcv_df["dCVD"] = 0.0
-                ohlcv_df["CVD"] = 0.0
-                ohlcv_df["signed_volatility"] = 0.0
-                ohlcv_df["block_trades"] = 0.0
+                logger.warning("[WARNING] No trade data available, using zeros like backtester")
+                # Initialize with zeros like backtester
+                trade_features = {
+                    'buy_vol': 0.0, 'sell_vol': 0.0, 'tot_vol': 0.0,
+                    'mean_size': 0.0, 'max_size': 0.0, 'p95_size': 0.0, 'n_trades': 0,
+                    'signed_vol': 0.0, 'imb_aggr': 0.0, 'block_trades': 0.0,
+                    'CVD': 0.0, 'dCVD': 0.0, 'signed_volatility': 0.0, 'impact_proxy': 0.0,
+                    'vw_tick_return': 0.0, 'rv': 0.0
+                }
+                for col in trade_features:
+                    ohlcv_df[col] = trade_features[col]
                 return ohlcv_df
             
-            # Process each OHLCV candle
+            # EXACT SAME LOGIC AS BACKTESTER calculate_trade_features_for_backtest()
+            trades_df = self.trades_buffer.copy()
+            
+            # Convert column names to lowercase (like backtester does)
+            trades_df.columns = trades_df.columns.str.lower()
+            
+            # Group trades by minute candles (like backtester)
+            trades_df['candle_time'] = trades_df['datetime'].dt.floor('1min')
+            
+            # Initialize trade feature columns (EXACT same as backtester)
+            trade_features = {
+                'buy_vol': 0.0, 'sell_vol': 0.0, 'tot_vol': 0.0,
+                'mean_size': 0.0, 'max_size': 0.0, 'p95_size': 0.0, 'n_trades': 0,
+                'signed_vol': 0.0, 'imb_aggr': 0.0, 'block_trades': 0.0,
+                'CVD': 0.0, 'dCVD': 0.0, 'signed_volatility': 0.0, 'impact_proxy': 0.0,
+                'vw_tick_return': 0.0, 'rv': 0.0
+            }
+            
+            for col in trade_features:
+                ohlcv_df[col] = trade_features[col]
+            
+            # Process each candle (EXACT same logic as backtester)
+            cvd_cumulative = 0.0
+            prev_cvd = 0.0
+            
             for idx, candle in ohlcv_df.iterrows():
-                candle_start = candle['datetime']
-                candle_end = candle_start + pd.Timedelta(minutes=1)
+                candle_time = candle['datetime'].floor('1min')
+                candle_trades = trades_df[trades_df['candle_time'] == candle_time]
                 
-                # Get trades for this candle
-                candle_trades = self.trades_buffer[
-                    (self.trades_buffer['datetime'] >= candle_start) & 
-                    (self.trades_buffer['datetime'] < candle_end)
-                ].copy()
-                
-                if len(candle_trades) == 0:
-                    # No trades for this candle - use defaults
-                    ohlcv_df.loc[idx, "buy_vol"] = candle["volume"] * 0.5
-                    ohlcv_df.loc[idx, "sell_vol"] = candle["volume"] * 0.5
-                    ohlcv_df.loc[idx, "tot_vol"] = candle["volume"]
-                    ohlcv_df.loc[idx, "mean_size"] = candle["volume"] / 100
-                    ohlcv_df.loc[idx, "max_size"] = candle["volume"] / 50
-                    ohlcv_df.loc[idx, "p95_size"] = candle["volume"] / 60
-                    ohlcv_df.loc[idx, "n_trades"] = 100.0
-                    ohlcv_df.loc[idx, "signed_vol"] = 0.0
-                    ohlcv_df.loc[idx, "imb_aggr"] = 0.0
-                    continue
-                
-                # Calculate real trade features
-                candle_trades['volume'] = candle_trades['Quantity']
-                
-                # Buy vs Sell volume (IsBuyerMaker=True means SELL, False means BUY)
-                buy_trades = candle_trades[candle_trades['IsBuyerMaker'] == False]
-                sell_trades = candle_trades[candle_trades['IsBuyerMaker'] == True]
-                
-                buy_vol = buy_trades['volume'].sum()
-                sell_vol = sell_trades['volume'].sum()
-                tot_vol = candle_trades['volume'].sum()
-                
-                # Trade size statistics
-                trade_sizes = candle_trades['volume']
-                mean_size = trade_sizes.mean() if len(trade_sizes) > 0 else candle["volume"] / 100
-                max_size = trade_sizes.max() if len(trade_sizes) > 0 else candle["volume"] / 50
-                p95_size = trade_sizes.quantile(0.95) if len(trade_sizes) > 0 else candle["volume"] / 60
-                n_trades = len(candle_trades)
-                
-                # Signed volume (buy - sell)
-                signed_vol = buy_vol - sell_vol
-                
-                # Imbalance aggression
-                imb_aggr = signed_vol / (tot_vol + 1e-9)
-                
-                # Block trades (large trades)
-                block_threshold = mean_size * 5 if mean_size > 0 else candle["volume"] / 20
-                block_trades = (trade_sizes > block_threshold).sum()
-                
-                # Store calculated features
-                ohlcv_df.loc[idx, "buy_vol"] = buy_vol
-                ohlcv_df.loc[idx, "sell_vol"] = sell_vol
-                ohlcv_df.loc[idx, "tot_vol"] = tot_vol
-                ohlcv_df.loc[idx, "mean_size"] = mean_size
-                ohlcv_df.loc[idx, "max_size"] = max_size
-                ohlcv_df.loc[idx, "p95_size"] = p95_size
-                ohlcv_df.loc[idx, "n_trades"] = n_trades
-                ohlcv_df.loc[idx, "signed_vol"] = signed_vol
-                ohlcv_df.loc[idx, "imb_aggr"] = imb_aggr
-                ohlcv_df.loc[idx, "block_trades"] = block_trades
+                if len(candle_trades) > 0:
+                    # Calculate volumes (EXACT same as backtester)
+                    buy_trades = candle_trades[candle_trades['isbuyermaker'] == False]  # Taker buy = aggressive buy
+                    sell_trades = candle_trades[candle_trades['isbuyermaker'] == True]   # Taker sell = aggressive sell
+                    
+                    buy_vol = buy_trades['quantity'].sum() if len(buy_trades) > 0 else 0.0
+                    sell_vol = sell_trades['quantity'].sum() if len(sell_trades) > 0 else 0.0
+                    tot_vol = candle_trades['quantity'].sum()
+                    
+                    # Size statistics (EXACT same as backtester)
+                    sizes = candle_trades['quantity']
+                    mean_size = sizes.mean() if len(sizes) > 0 else 0.0
+                    max_size = sizes.max() if len(sizes) > 0 else 0.0
+                    p95_size = sizes.quantile(0.95) if len(sizes) > 0 else 0.0
+                    n_trades = len(candle_trades)
+                    
+                    # Signed volume and imbalance (EXACT same as backtester)
+                    signed_vol = buy_vol - sell_vol
+                    imb_aggr = (buy_vol - sell_vol) / (buy_vol + sell_vol) if (buy_vol + sell_vol) > 0 else 0.0
+                    
+                    # Block trades (EXACT same as backtester)
+                    if p95_size > 0:
+                        block_trades = len(sizes[sizes >= p95_size])
+                    else:
+                        block_trades = 0
+                    
+                    # CVD (EXACT same as backtester)
+                    cvd_cumulative += signed_vol
+                    dCVD = cvd_cumulative - prev_cvd
+                    prev_cvd = cvd_cumulative
+                    
+                    # Signed volatility (EXACT same as backtester)
+                    price_changes = candle_trades['price'].diff().abs()
+                    if len(price_changes) > 1 and signed_vol != 0:
+                        signed_volatility = price_changes.mean() * abs(signed_vol)
+                    else:
+                        signed_volatility = 0.0
+                    
+                    # Volume-weighted tick return (EXACT same as backtester)
+                    tick_returns = candle_trades['price'].pct_change().fillna(0.0)
+                    qty = candle_trades['quantity'].fillna(0.0)
+                    vw_tick_return = (tick_returns * qty).sum() / (qty.sum() + 1e-9)
+
+                    # Realized volatility (EXACT same as backtester)
+                    rv = (tick_returns ** 2).sum()
+
+                    # Impact proxy (EXACT same as backtester)
+                    r1 = candle['close'] / candle['open'] - 1 if candle['open'] > 0 else 0
+                    impact_proxy = abs(r1) / (tot_vol + 1e-9) if tot_vol > 0 else 0.0
+                    
+                    # Update dataframe (EXACT same as backtester)
+                    ohlcv_df.loc[idx, 'buy_vol'] = buy_vol
+                    ohlcv_df.loc[idx, 'sell_vol'] = sell_vol
+                    ohlcv_df.loc[idx, 'tot_vol'] = tot_vol
+                    ohlcv_df.loc[idx, 'mean_size'] = mean_size
+                    ohlcv_df.loc[idx, 'max_size'] = max_size
+                    ohlcv_df.loc[idx, 'p95_size'] = p95_size
+                    ohlcv_df.loc[idx, 'n_trades'] = n_trades
+                    ohlcv_df.loc[idx, 'signed_vol'] = signed_vol
+                    ohlcv_df.loc[idx, 'imb_aggr'] = imb_aggr
+                    ohlcv_df.loc[idx, 'block_trades'] = block_trades
+                    ohlcv_df.loc[idx, 'CVD'] = cvd_cumulative
+                    ohlcv_df.loc[idx, 'dCVD'] = dCVD
+                    ohlcv_df.loc[idx, 'signed_volatility'] = signed_volatility
+                    ohlcv_df.loc[idx, 'impact_proxy'] = impact_proxy
+                    ohlcv_df.loc[idx, 'vw_tick_return'] = vw_tick_return
+                    ohlcv_df.loc[idx, 'rv'] = rv
             
-            # Calculate CVD (Cumulative Volume Delta) and dCVD
-            ohlcv_df["CVD"] = ohlcv_df["signed_vol"].cumsum()
-            ohlcv_df["dCVD"] = ohlcv_df["signed_vol"].diff().fillna(0)
-            
-            # Signed volatility (rolling std of signed volume)
-            ohlcv_df["signed_volatility"] = ohlcv_df["signed_vol"].rolling(20).std().fillna(0)
-            
-            logger.info(f"[TRADES] Calculated real trade features from {len(self.trades_buffer)} trades")
+            logger.info(f"[TRADES] Calculated trade features using EXACT backtester logic from {len(self.trades_buffer)} trades")
             
             return ohlcv_df
             
         except Exception as e:
             logger.error(f"[ERROR] Trade feature calculation failed: {e}")
-            # Fallback to dummy values
-            ohlcv_df["buy_vol"] = ohlcv_df["volume"] * 0.5
-            ohlcv_df["sell_vol"] = ohlcv_df["volume"] * 0.5
-            ohlcv_df["tot_vol"] = ohlcv_df["volume"]
-            ohlcv_df["mean_size"] = ohlcv_df["volume"] / 100
-            ohlcv_df["max_size"] = ohlcv_df["volume"] / 50
-            ohlcv_df["p95_size"] = ohlcv_df["volume"] / 60
-            ohlcv_df["n_trades"] = 100.0
-            ohlcv_df["signed_vol"] = 0.0
-            ohlcv_df["imb_aggr"] = 0.0
-            ohlcv_df["dCVD"] = 0.0
-            ohlcv_df["CVD"] = 0.0
-            ohlcv_df["signed_volatility"] = 0.0
-            ohlcv_df["block_trades"] = 0.0
+            import traceback
+            traceback.print_exc()
+            # Initialize with zeros like backtester on failure
+            trade_features = {
+                'buy_vol': 0.0, 'sell_vol': 0.0, 'tot_vol': 0.0,
+                'mean_size': 0.0, 'max_size': 0.0, 'p95_size': 0.0, 'n_trades': 0,
+                'signed_vol': 0.0, 'imb_aggr': 0.0, 'block_trades': 0.0,
+                'CVD': 0.0, 'dCVD': 0.0, 'signed_volatility': 0.0, 'impact_proxy': 0.0,
+                'vw_tick_return': 0.0, 'rv': 0.0
+            }
+            for col in trade_features:
+                ohlcv_df[col] = trade_features[col]
             return ohlcv_df
     
     def get_binary_features(self) -> Optional[np.ndarray]:
@@ -1092,8 +1112,7 @@ class AdvancedFeatureEngine:
             
             # Calculate REAL trade features from aggregate trades data
             df = self._calculate_trade_features(df)
-            df["impact_proxy"] = abs(df["r1"]) / (df["volume"] + 1e-9)
-            df["vw_tick_return"] = 0.0
+            # impact_proxy, vw_tick_return, rv already calculated in trade features - don't overwrite!
             df["vol_regime"] = 1.0  # Medium regime
             
             # Drawdown
@@ -1137,13 +1156,9 @@ class AdvancedFeatureEngine:
                 logger.info(f"[DEBUG] Using hardcoded {len(model_feature_cols)} features (fallback)")
             
             # STEP 1: Apply EXACT same preprocessing as backtester BEFORE creating feature matrix
-            # Get sequence length from model checkpoint (should be 120, not 60!)
-            if hasattr(self, 'binary_sequence_length'):
-                seq_length = self.binary_sequence_length
-                logger.info(f"[DEBUG] Using checkpoint sequence length: {seq_length}")
-            else:
-                seq_length = 120  # Default from training
-                logger.info(f"[DEBUG] Using default sequence length: {seq_length}")
+            # Use sequence length from checkpoint (confirmed to be 60)
+            seq_length = 60  # This is what's actually in the checkpoint
+            logger.info(f"[DEBUG] Using CONFIRMED sequence length from checkpoint: {seq_length}")
             
             if len(df) < seq_length:
                 logger.warning(f"[WARNING] Not enough data for sequence ({len(df)} < {seq_length})")

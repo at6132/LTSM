@@ -573,19 +573,18 @@ class AdvancedFeatureEngine:
         self.ohlcv_buffer = pd.DataFrame()
         self.trades_buffer = pd.DataFrame()
         
-        # Hardcoded feature columns (no parquet dependency)
+        # EXACT SAME 38 BINARY FEATURES AS BACKTESTER (37 base + y_actionable = 38)
         self.feature_columns = [
-            "open", "high", "low", "close", "volume", "quote_volume",
-            "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
-            "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
-            "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
-            "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
-            "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
-            "minute_sin", "minute_cos", "day_sin", "day_cos", 
-            "session_asia", "session_europe", "session_us",
-            "price_position", "vol_concentration", "vol_entropy"
-        ]
-        logger.info(f"[FEATURES] Using {len(self.feature_columns)} hardcoded feature columns")
+            "open", "volume", "quote_volume", "r1", "r2", "r5", "r10", 
+            "range_pct", "body_pct", "rv", "vol_z", "avg_trade_size",
+            "buy_vol", "sell_vol", "mean_size", "max_size", "p95_size", 
+            "n_trades", "signed_vol", "imb_aggr", "CVD", "signed_volatility",
+            "block_trades", "impact_proxy", "vw_tick_return", "vol_regime",
+            "drawdown", "minute_sin", "minute_cos", "day_sin", "day_cos",
+            "session_asia", "session_europe", "session_us", "price_position",
+            "vol_concentration", "vol_entropy", "y_actionable"
+        ]  # EXACTLY 38 features matching backtester
+        logger.info(f"[FEATURES] Using EXACT {len(self.feature_columns)} binary features matching backtester")
         
     def update_data(self, ohlcv_file: str, trades_file: str):
         ohlcv_ok = self.update_ohlcv(ohlcv_file)
@@ -613,8 +612,14 @@ class AdvancedFeatureEngine:
         try:
             df = pd.read_csv(trades_file)
             if len(df) > 0:
+                # Create datetime column from DateTime column
                 df['datetime'] = pd.to_datetime(df['DateTime'])
+                # Ensure we keep all needed columns
+                df['quantity'] = df['Quantity']
+                df['price'] = df['Price'] 
+                df['isbuyermaker'] = df['IsBuyerMaker']
                 self.trades_buffer = df.sort_values('datetime').tail(1000)
+                logger.info(f"[DEBUG] Loaded trades with columns: {list(self.trades_buffer.columns)}")
                 return True
         except Exception as e:
             logger.error(f"[ERROR] Trades update failed: {e}")
@@ -969,20 +974,17 @@ class AdvancedFeatureEngine:
             # EXACT SAME LOGIC AS BACKTESTER calculate_trade_features_for_backtest()
             trades_df = self.trades_buffer.copy()
             
-            # Store datetime column separately before column name conversion
-            datetime_col = None
+            # Ensure we have the right columns and types
+            logger.info(f"[DEBUG] Original columns: {list(trades_df.columns)}")
+            logger.info(f"[DEBUG] DataFrame shape: {trades_df.shape}")
+            
+            # Ensure datetime column is properly typed
             if 'datetime' in trades_df.columns:
-                datetime_col = pd.to_datetime(trades_df['datetime'])  # Ensure it's datetime type
-                logger.info(f"[DEBUG] Stored datetime column with {len(datetime_col)} values")
+                trades_df['datetime'] = pd.to_datetime(trades_df['datetime'])
+                logger.info(f"[DEBUG] Converted datetime column, dtype: {trades_df['datetime'].dtype}")
             else:
-                logger.error(f"[ERROR] No datetime column in trades_buffer! Columns: {list(trades_df.columns)}")
-                raise ValueError("Missing datetime column in trades data")
-            
-            # Convert column names to lowercase (like backtester does)
-            trades_df.columns = trades_df.columns.str.lower()
-            
-            # Restore datetime column with proper type
-            trades_df['datetime'] = datetime_col
+                logger.error(f"[ERROR] No datetime column in trades_buffer!")
+                raise ValueError("Missing datetime column")
             
             # Group trades by minute candles (like backtester)
             trades_df['candle_time'] = trades_df['datetime'].dt.floor('1min')
@@ -1156,17 +1158,9 @@ class AdvancedFeatureEngine:
                 model_feature_cols = self.feature_cols
                 logger.info(f"[DEBUG] Model expects {len(model_feature_cols)} features from checkpoint")
             else:
-                # Fallback to hardcoded feature columns (including quote_volume)
-                model_feature_cols = [
-                    "open", "high", "low", "close", "volume", "quote_volume",
-                    "r1", "r2", "r5", "r10", "range_pct", "body_pct", "atr_pct", "rv",
-                    "vol_z", "avg_trade_size", "buy_vol", "sell_vol", "tot_vol", 
-                    "mean_size", "max_size", "p95_size", "n_trades", "signed_vol", 
-                    "imb_aggr", "dCVD", "CVD", "signed_volatility", "block_trades",
-                    "impact_proxy", "vw_tick_return", "vol_regime", "drawdown", 
-                    "minute_sin", "minute_cos", "day_sin", "day_cos", "y_actionable"
-                ]  # 37 base features + y_actionable = 38 total
-                logger.info(f"[DEBUG] Using hardcoded {len(model_feature_cols)} features (fallback)")
+                # Use MAIN HUB feature columns - ONE SOURCE OF TRUTH
+                model_feature_cols = self.feature_columns.copy()  # Use main hub feature list
+                logger.info(f"[DEBUG] Using MAIN HUB feature columns: {len(model_feature_cols)} features")
             
             # STEP 1: Apply EXACT same preprocessing as backtester BEFORE creating feature matrix
             # Use sequence length from checkpoint (confirmed to be 60)

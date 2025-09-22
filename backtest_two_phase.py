@@ -583,18 +583,44 @@ class TwoPhaseBacktester:
         binary_features_final = binary_features_scaled
         print(f"✅ Created EXACT 38 binary features (no truncation)")
         
-        # For directional model: create features matching the scaler's expected input
-        directional_features_ordered = pd.DataFrame(index=df.index)
+        # For directional model: use EXACT 238 features in correct order
+        directional_feature_cols = [
+            'open', 'high_x', 'low_x', 'close_x', 'volume', 'quote_volume', 'r1', 'r2', 'r5', 'r10', 'range_pct', 'body_pct', 'rv', 'vol_z', 'avg_trade_size', 'buy_vol', 'sell_vol', 'mean_size', 'max_size', 'p95_size', 'n_trades', 'signed_vol', 'imb_aggr', 'CVD', 'signed_volatility', 'block_trades', 'impact_proxy', 'vw_tick_return', 'vol_regime', 'drawdown', 'minute_sin', 'minute_cos', 'day_sin', 'day_cos', 'session_asia', 'session_europe', 'session_us', 'price_position', 'vol_concentration', 'vol_entropy',
+            'buy_sell_ratio', 'buy_sell_diff', 'buy_sell_imbalance', 'buy_momentum_5', 'sell_momentum_5', 'imbalance_momentum_5', 'imbalance_volatility_5', 'buy_momentum_10', 'sell_momentum_10', 'imbalance_momentum_10', 'imbalance_volatility_10', 'buy_momentum_20', 'sell_momentum_20', 'imbalance_momentum_20', 'imbalance_volatility_20', 'cumulative_buy_pressure', 'cumulative_sell_pressure', 'cumulative_imbalance', 'buy_acceleration', 'sell_acceleration', 'imbalance_acceleration',
+            'hl_spread', 'hl_spread_norm', 'open_position', 'intrabar_momentum', 'intrabar_reversal', 'volume_price_trend', 'vpt', 'vpt_momentum', 'tick_direction', 'tick_momentum', 'tick_acceleration',
+            'rsi_7', 'rsi_momentum_7', 'rsi_divergence_7', 'rsi_14', 'rsi_momentum_14', 'rsi_divergence_14', 'rsi_21', 'rsi_momentum_21', 'rsi_divergence_21', 'rsi_50', 'rsi_momentum_50', 'rsi_divergence_50',
+            'macd_8_21', 'macd_signal_8_21', 'macd_histogram_8_21', 'macd_momentum_8_21', 'macd_acceleration_8_21', 'macd_12_26', 'macd_signal_12_26', 'macd_histogram_12_26', 'macd_momentum_12_26', 'macd_acceleration_12_26', 'macd_19_39', 'macd_signal_19_39', 'macd_histogram_19_39', 'macd_momentum_19_39', 'macd_acceleration_19_39',
+            'bb_upper_10', 'bb_lower_10', 'bb_position_10', 'bb_width_10', 'bb_squeeze_10', 'bb_upper_20', 'bb_lower_20', 'bb_position_20', 'bb_width_20', 'bb_squeeze_20', 'bb_upper_50', 'bb_lower_50', 'bb_position_50', 'bb_width_50', 'bb_squeeze_50',
+            'stoch_k_14', 'stoch_d_14', 'stoch_momentum_14', 'stoch_k_21', 'stoch_d_21', 'stoch_momentum_21', 'stoch_k_50', 'stoch_d_50', 'stoch_momentum_50',
+            'volume_at_high_10', 'volume_at_low_10', 'volume_at_mid_10', 'volume_concentration_10', 'high_volume_momentum_10', 'low_volume_momentum_10', 'volume_at_high_20', 'volume_at_low_20', 'volume_at_mid_20', 'volume_concentration_20', 'high_volume_momentum_20', 'low_volume_momentum_20', 'volume_at_high_50', 'volume_at_low_50', 'volume_at_mid_50', 'volume_concentration_50', 'high_volume_momentum_50', 'low_volume_momentum_50',
+            'vwap_10', 'vwap_deviation_10', 'vwap_momentum_10', 'vwap_20', 'vwap_deviation_20', 'vwap_momentum_20', 'vwap_50', 'vwap_deviation_50', 'vwap_momentum_50',
+            'volume_roc_3', 'volume_acceleration_3', 'volume_roc_5', 'volume_acceleration_5', 'volume_roc_10', 'volume_acceleration_10',
+            'volatility_10', 'volatility_rank_10', 'volatility_regime_10', 'volatility_20', 'volatility_rank_20', 'volatility_regime_20', 'volatility_50', 'volatility_rank_50', 'volatility_regime_50',
+            'trend_strength_10', 'trend_direction_10', 'trend_momentum_10', 'trend_strength_20', 'trend_direction_20', 'trend_momentum_20', 'trend_strength_50', 'trend_direction_50', 'trend_momentum_50',
+            'mean_reversion_5', 'mean_reversion_momentum_5', 'zscore_5', 'mean_reversion_10', 'mean_reversion_momentum_10', 'zscore_10', 'mean_reversion_20', 'mean_reversion_momentum_20', 'zscore_20',
+            'volume_efficiency_5', 'volume_efficiency_momentum_5', 'volume_efficiency_10', 'volume_efficiency_momentum_10', 'volume_efficiency_20', 'volume_efficiency_momentum_20',
+            'volume_zscore', 'large_trade', 'large_buy_trade', 'large_sell_trade', 'cumulative_large_buys', 'cumulative_large_sells', 'large_trade_imbalance',
+            'volume_impact_1', 'impact_decay_1', 'volume_impact_3', 'impact_decay_3', 'volume_impact_5', 'impact_decay_5',
+            'price_volume_divergence_5', 'price_volume_divergence_10', 'price_volume_divergence_20', 'macd_divergence',
+            'price_autocorr_1', 'volume_autocorr_1', 'price_autocorr_2', 'volume_autocorr_2', 'price_autocorr_3', 'volume_autocorr_3', 'price_autocorr_5', 'volume_autocorr_5',
+            'price_volume_corr_10', 'price_volume_corr_momentum_10', 'price_volume_corr_20', 'price_volume_corr_momentum_20', 'price_volume_corr_50', 'price_volume_corr_momentum_50',
+            'momentum_corr_5_10', 'momentum_corr_10_20', 'momentum_corr_20_50',
+            'hour', 'minute', 'day_of_week', 'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos', 'asian_session', 'european_session', 'us_session', 'session_open', 'session_close',
+            'high_y', 'low_y', 'close_y'
+        ]
         
+        print(f"📊 Using EXACT {len(directional_feature_cols)} directional features (no truncation)")
+        
+        # Create directional feature matrix with exact columns
+        directional_features_ordered = pd.DataFrame(index=df.index)
         missing_count = 0
-        # Add features in the exact order the scaler expects
-        for expected_col in self.directional_feature_cols:
-            if expected_col in df.columns:
-                directional_features_ordered[expected_col] = df[expected_col]
+        for col in directional_feature_cols:
+            if col in df.columns:
+                directional_features_ordered[col] = df[col]
             else:
-                # Add missing features as zeros (model should handle this gracefully)
-                directional_features_ordered[expected_col] = 0.0
+                directional_features_ordered[col] = 0.0
                 missing_count += 1
+                print(f"⚠️  Missing directional feature: {col}")
                 
         if missing_count > 0:
             print(f"⚠️  Added {missing_count} missing directional features as zeros")
@@ -929,6 +955,9 @@ def load_live_data() -> pd.DataFrame:
     # y_actionable = 0 (will be added later)
     df['y_actionable'] = 0
 
+    # === NOW COMPUTE ALL 238 DIRECTIONAL FEATURES ===
+    df = compute_all_directional_features(df)
+    
     # Fill NaNs and infinities
     df = df.replace([np.inf, -np.inf], 0).fillna(0)
 
@@ -956,6 +985,255 @@ def load_live_data() -> pd.DataFrame:
     for col in ['r1', 'volume', 'buy_vol', 'sell_vol', 'impact_proxy', 'signed_volatility']:
         if col in df.columns:
             print(f"     {col}: min={df[col].min():.6f}, max={df[col].max():.6f}, mean={df[col].mean():.6f}")
+    
+    return df
+
+
+def compute_all_directional_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute ALL 238 directional features exactly as expected by the model"""
+    
+    print(f"🔧 Computing ALL 238 directional features...")
+    
+    # === DIRECTIONAL MODEL SPECIFIC FEATURES ===
+    # Directional model has high_x, low_x, close_x (vs high, low, close for binary)
+    df['high_x'] = df['high']
+    df['low_x'] = df['low'] 
+    df['close_x'] = df['close']
+    
+    # Buy/sell ratios and imbalances
+    df['buy_sell_ratio'] = df['buy_vol'] / (df['sell_vol'] + 1e-9)
+    df['buy_sell_diff'] = df['buy_vol'] - df['sell_vol']
+    df['buy_sell_imbalance'] = (df['buy_vol'] - df['sell_vol']) / (df['buy_vol'] + df['sell_vol'] + 1e-9)
+    
+    # Momentum features (5, 10, 20 periods)
+    for period in [5, 10, 20]:
+        df[f'buy_momentum_{period}'] = df['buy_vol'].rolling(period, min_periods=1).mean()
+        df[f'sell_momentum_{period}'] = df['sell_vol'].rolling(period, min_periods=1).mean()
+        df[f'imbalance_momentum_{period}'] = df['buy_sell_imbalance'].rolling(period, min_periods=1).mean()
+        df[f'imbalance_volatility_{period}'] = df['buy_sell_imbalance'].rolling(period, min_periods=1).std().fillna(0)
+    
+    # Cumulative pressures
+    df['cumulative_buy_pressure'] = df['buy_vol'].cumsum()
+    df['cumulative_sell_pressure'] = df['sell_vol'].cumsum()
+    df['cumulative_imbalance'] = df['buy_sell_imbalance'].cumsum()
+    
+    # Accelerations (2nd derivative)
+    df['buy_acceleration'] = df['buy_vol'].diff(2)
+    df['sell_acceleration'] = df['sell_vol'].diff(2)
+    df['imbalance_acceleration'] = df['buy_sell_imbalance'].diff(2)
+    
+    # High-Low spread features
+    df['hl_spread'] = df['high'] - df['low']
+    df['hl_spread_norm'] = df['hl_spread'] / df['close']
+    df['open_position'] = (df['open'] - df['low']) / (df['high'] - df['low'] + 1e-9)
+    
+    # Intrabar momentum and reversal
+    df['intrabar_momentum'] = (df['close'] - df['open']) / (df['open'] + 1e-9)
+    df['intrabar_reversal'] = ((df['high'] + df['low']) / 2 - df['close']).abs() / (df['high'] - df['low'] + 1e-9)
+    
+    # Volume Price Trend
+    df['volume_price_trend'] = df['r1'] * df['volume']
+    df['vpt'] = df['volume_price_trend'].cumsum()
+    df['vpt_momentum'] = df['vpt'].diff()
+    
+    # Tick direction and momentum
+    df['tick_direction'] = np.sign(df['r1'])
+    df['tick_momentum'] = df['tick_direction'].rolling(5, min_periods=1).mean()
+    df['tick_acceleration'] = df['tick_momentum'].diff()
+    
+    # === RSI FEATURES ===
+    for period in [7, 14, 21, 50]:
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
+        rs = gain / (loss + 1e-9)
+        rsi = 100 - (100 / (1 + rs))
+        
+        df[f'rsi_{period}'] = rsi
+        df[f'rsi_momentum_{period}'] = rsi.diff()
+        df[f'rsi_divergence_{period}'] = rsi - rsi.rolling(period, min_periods=1).mean()
+    
+    # === MACD FEATURES ===
+    for fast, slow in [(8, 21), (12, 26), (19, 39)]:
+        ema_fast = df['close'].ewm(span=fast).mean()
+        ema_slow = df['close'].ewm(span=slow).mean()
+        macd = ema_fast - ema_slow
+        signal = macd.ewm(span=9).mean()
+        histogram = macd - signal
+        
+        df[f'macd_{fast}_{slow}'] = macd
+        df[f'macd_signal_{fast}_{slow}'] = signal
+        df[f'macd_histogram_{fast}_{slow}'] = histogram
+        df[f'macd_momentum_{fast}_{slow}'] = macd.diff()
+        df[f'macd_acceleration_{fast}_{slow}'] = macd.diff(2)
+    
+    # === BOLLINGER BANDS ===
+    for period in [10, 20, 50]:
+        sma = df['close'].rolling(period, min_periods=1).mean()
+        std = df['close'].rolling(period, min_periods=1).std()
+        
+        df[f'bb_upper_{period}'] = sma + (2 * std)
+        df[f'bb_lower_{period}'] = sma - (2 * std)
+        df[f'bb_position_{period}'] = (df['close'] - df[f'bb_lower_{period}']) / (df[f'bb_upper_{period}'] - df[f'bb_lower_{period}'] + 1e-9)
+        df[f'bb_width_{period}'] = (df[f'bb_upper_{period}'] - df[f'bb_lower_{period}']) / sma
+        df[f'bb_squeeze_{period}'] = (std < std.rolling(period, min_periods=1).mean()).astype(int)
+    
+    # === STOCHASTIC ===
+    for period in [14, 21, 50]:
+        lowest_low = df['low'].rolling(period, min_periods=1).min()
+        highest_high = df['high'].rolling(period, min_periods=1).max()
+        k_percent = (df['close'] - lowest_low) / (highest_high - lowest_low + 1e-9) * 100
+        d_percent = k_percent.rolling(3, min_periods=1).mean()
+        
+        df[f'stoch_k_{period}'] = k_percent
+        df[f'stoch_d_{period}'] = d_percent
+        df[f'stoch_momentum_{period}'] = k_percent.diff()
+    
+    # === VOLUME DISTRIBUTION ===
+    for period in [10, 20, 50]:
+        # Volume at different price levels within the bar
+        df[f'volume_at_high_{period}'] = (df['volume'] * (df['close'] == df['high']).astype(int)).rolling(period, min_periods=1).sum()
+        df[f'volume_at_low_{period}'] = (df['volume'] * (df['close'] == df['low']).astype(int)).rolling(period, min_periods=1).sum()
+        df[f'volume_at_mid_{period}'] = df['volume'].rolling(period, min_periods=1).sum() - df[f'volume_at_high_{period}'] - df[f'volume_at_low_{period}']
+        
+        total_vol = df['volume'].rolling(period, min_periods=1).sum()
+        df[f'volume_concentration_{period}'] = df[f'volume_at_high_{period}'] / (total_vol + 1e-9)
+        df[f'high_volume_momentum_{period}'] = df[f'volume_at_high_{period}'].diff()
+        df[f'low_volume_momentum_{period}'] = df[f'volume_at_low_{period}'].diff()
+    
+    # === VWAP ===
+    for period in [10, 20, 50]:
+        vwap = (df['close'] * df['volume']).rolling(period, min_periods=1).sum() / df['volume'].rolling(period, min_periods=1).sum()
+        df[f'vwap_{period}'] = vwap
+        df[f'vwap_deviation_{period}'] = (df['close'] - vwap) / vwap
+        df[f'vwap_momentum_{period}'] = vwap.diff()
+    
+    # === VOLUME RATE OF CHANGE ===
+    for period in [3, 5, 10]:
+        df[f'volume_roc_{period}'] = df['volume'].pct_change(period)
+        df[f'volume_acceleration_{period}'] = df[f'volume_roc_{period}'].diff()
+    
+    # === VOLATILITY FEATURES ===
+    for period in [10, 20, 50]:
+        volatility = df['r1'].rolling(period, min_periods=1).std()
+        df[f'volatility_{period}'] = volatility
+        df[f'volatility_rank_{period}'] = volatility.rolling(period*2, min_periods=1).rank(pct=True)
+        
+        vol_q1 = volatility.quantile(0.33)
+        vol_q2 = volatility.quantile(0.66)
+        regime = np.select([volatility <= vol_q1, volatility <= vol_q2], [0, 1], default=2)
+        df[f'volatility_regime_{period}'] = regime
+    
+    # === TREND FEATURES ===
+    for period in [10, 20, 50]:
+        sma = df['close'].rolling(period, min_periods=1).mean()
+        trend_strength = (df['close'] - sma) / sma
+        trend_direction = np.sign(sma.diff())
+        
+        df[f'trend_strength_{period}'] = trend_strength
+        df[f'trend_direction_{period}'] = trend_direction
+        df[f'trend_momentum_{period}'] = trend_strength.diff()
+    
+    # === MEAN REVERSION ===
+    for period in [5, 10, 20]:
+        sma = df['close'].rolling(period, min_periods=1).mean()
+        std = df['close'].rolling(period, min_periods=1).std()
+        
+        mean_reversion = (sma - df['close']) / (std + 1e-9)
+        zscore = (df['close'] - sma) / (std + 1e-9)
+        
+        df[f'mean_reversion_{period}'] = mean_reversion
+        df[f'mean_reversion_momentum_{period}'] = mean_reversion.diff()
+        df[f'zscore_{period}'] = zscore
+    
+    # === VOLUME EFFICIENCY ===
+    for period in [5, 10, 20]:
+        price_change = df['close'].diff(period).abs()
+        volume_sum = df['volume'].rolling(period, min_periods=1).sum()
+        efficiency = price_change / (volume_sum + 1e-9)
+        
+        df[f'volume_efficiency_{period}'] = efficiency
+        df[f'volume_efficiency_momentum_{period}'] = efficiency.diff()
+    
+    # Volume z-score (additional)
+    vol_mean = df['volume'].rolling(50, min_periods=10).mean()
+    vol_std = df['volume'].rolling(50, min_periods=10).std()
+    df['volume_zscore'] = (df['volume'] - vol_mean) / (vol_std + 1e-9)
+    
+    # === LARGE TRADES ===
+    large_threshold = df['mean_size'].rolling(50, min_periods=10).quantile(0.95)
+    df['large_trade'] = (df['max_size'] > large_threshold).astype(int)
+    df['large_buy_trade'] = ((df['max_size'] > large_threshold) & (df['buy_vol'] > df['sell_vol'])).astype(int)
+    df['large_sell_trade'] = ((df['max_size'] > large_threshold) & (df['sell_vol'] > df['buy_vol'])).astype(int)
+    df['cumulative_large_buys'] = df['large_buy_trade'].cumsum()
+    df['cumulative_large_sells'] = df['large_sell_trade'].cumsum()
+    df['large_trade_imbalance'] = df['cumulative_large_buys'] - df['cumulative_large_sells']
+    
+    # === VOLUME IMPACT ===
+    for period in [1, 3, 5]:
+        volume_impact = df['r1'].abs() / (df['volume'] + 1e-9)
+        df[f'volume_impact_{period}'] = volume_impact.rolling(period, min_periods=1).mean()
+        df[f'impact_decay_{period}'] = volume_impact.rolling(period, min_periods=1).std().fillna(0)
+    
+    # === PRICE-VOLUME DIVERGENCE ===
+    for period in [5, 10, 20]:
+        price_momentum = df['close'].rolling(period, min_periods=1).apply(lambda x: np.corrcoef(np.arange(len(x)), x)[0, 1] if len(x) > 1 else 0)
+        volume_momentum = df['volume'].rolling(period, min_periods=1).apply(lambda x: np.corrcoef(np.arange(len(x)), x)[0, 1] if len(x) > 1 else 0)
+        df[f'price_volume_divergence_{period}'] = price_momentum - volume_momentum
+    
+    # MACD divergence (using 12-26)
+    df['macd_divergence'] = df['macd_12_26'] - df['macd_12_26'].rolling(20, min_periods=1).mean()
+    
+    # === AUTOCORRELATION ===
+    for lag in [1, 2, 3, 5]:
+        df[f'price_autocorr_{lag}'] = df['r1'].rolling(20, min_periods=lag+1).apply(
+            lambda x: np.corrcoef(x[:-lag], x[lag:])[0, 1] if len(x) > lag else 0
+        ).fillna(0)
+        df[f'volume_autocorr_{lag}'] = df['volume'].pct_change().rolling(20, min_periods=lag+1).apply(
+            lambda x: np.corrcoef(x[:-lag], x[lag:])[0, 1] if len(x) > lag else 0
+        ).fillna(0)
+    
+    # === PRICE-VOLUME CORRELATION ===
+    for period in [10, 20, 50]:
+        corr = df['r1'].rolling(period, min_periods=5).corr(df['volume'].pct_change())
+        df[f'price_volume_corr_{period}'] = corr.fillna(0)
+        df[f'price_volume_corr_momentum_{period}'] = corr.diff().fillna(0)
+    
+    # === MOMENTUM CORRELATIONS ===
+    mom_5 = df['close'].pct_change(5)
+    mom_10 = df['close'].pct_change(10) 
+    mom_20 = df['close'].pct_change(20)
+    
+    df['momentum_corr_5_10'] = mom_5.rolling(20, min_periods=5).corr(mom_10).fillna(0)
+    df['momentum_corr_10_20'] = mom_10.rolling(20, min_periods=5).corr(mom_20).fillna(0)
+    df['momentum_corr_20_50'] = mom_20.rolling(20, min_periods=5).corr(df['close'].pct_change(50)).fillna(0)
+    
+    # === TIME FEATURES ===
+    df['hour'] = df['ts'].dt.hour
+    df['minute'] = df['ts'].dt.minute
+    df['day_of_week'] = df['ts'].dt.dayofweek
+    
+    # Hour and day of week cyclical
+    df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+    df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+    df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+    df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+    
+    # Sessions (different names for directional)
+    df['asian_session'] = df['session_asia']
+    df['european_session'] = df['session_europe']
+    df['us_session'] = df['session_us']
+    
+    # Session open/close (simplified)
+    df['session_open'] = ((df['hour'] == 0) | (df['hour'] == 8) | (df['hour'] == 16)).astype(int)
+    df['session_close'] = ((df['hour'] == 7) | (df['hour'] == 15) | (df['hour'] == 23)).astype(int)
+    
+    # Final high_y, low_y, close_y (same as high_x, low_x, close_x)
+    df['high_y'] = df['high']
+    df['low_y'] = df['low']
+    df['close_y'] = df['close']
+    
+    print(f"✅ Computed ALL directional features")
     
     return df
 

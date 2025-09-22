@@ -969,15 +969,24 @@ class AdvancedFeatureEngine:
             # EXACT SAME LOGIC AS BACKTESTER calculate_trade_features_for_backtest()
             trades_df = self.trades_buffer.copy()
             
-            # Ensure datetime column is datetime type BEFORE converting to lowercase
+            # Store datetime column separately before column name conversion
+            datetime_col = None
             if 'datetime' in trades_df.columns:
-                trades_df['datetime'] = pd.to_datetime(trades_df['datetime'])
+                datetime_col = pd.to_datetime(trades_df['datetime'])  # Ensure it's datetime type
+                logger.info(f"[DEBUG] Stored datetime column with {len(datetime_col)} values")
+            else:
+                logger.error(f"[ERROR] No datetime column in trades_buffer! Columns: {list(trades_df.columns)}")
+                raise ValueError("Missing datetime column in trades data")
             
             # Convert column names to lowercase (like backtester does)
             trades_df.columns = trades_df.columns.str.lower()
             
+            # Restore datetime column with proper type
+            trades_df['datetime'] = datetime_col
+            
             # Group trades by minute candles (like backtester)
             trades_df['candle_time'] = trades_df['datetime'].dt.floor('1min')
+            logger.info(f"[DEBUG] Created {len(trades_df['candle_time'].unique())} unique candle times")
             
             # Initialize trade feature columns (EXACT same as backtester)
             trade_features = {

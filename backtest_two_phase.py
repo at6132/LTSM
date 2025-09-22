@@ -514,34 +514,48 @@ class TwoPhaseBacktester:
         print(f"   Take profit: {take_profit_pct:.1%}")
         
         # Prepare features for both models
-        # For binary model: use truncation method (232 advanced -> first 38)
-        exclude_cols = ['ts', 'timestamp', 'datetime', 'candle_time',
-                        'y_move', 'y_actionable', 'y_hit', 'y_tth', 'y_direction']
-        duplicate_features = ['high', 'low', 'close', 'tot_vol', 'atr_pct', 'dCVD']
+        # For binary model: use EXACT 38 features in correct order
+        binary_feature_cols = [
+            'open', 'volume', 'quote_volume', 'r1', 'r2', 'r5', 'r10', 
+            'range_pct', 'body_pct', 'rv', 'vol_z', 'avg_trade_size',
+            'buy_vol', 'sell_vol', 'mean_size', 'max_size', 'p95_size', 
+            'n_trades', 'signed_vol', 'imb_aggr', 'CVD', 'signed_volatility',
+            'block_trades', 'impact_proxy', 'vw_tick_return', 'vol_regime',
+            'drawdown', 'minute_sin', 'minute_cos', 'day_sin', 'day_cos',
+            'session_asia', 'session_europe', 'session_us', 'price_position',
+            'vol_concentration', 'vol_entropy', 'y_actionable'
+        ]
         
-        # Get feature columns from advanced features (same as labeling script), numeric only
-        available_features = [col for col in df.columns
-                              if col not in exclude_cols and col not in duplicate_features]
-        # Keep only numeric dtypes to avoid scaler errors on datetimes/objects
-        available_features = [col for col in available_features
-                              if np.issubdtype(df[col].dtype, np.number)]
+        print(f"📊 Using EXACT {len(binary_feature_cols)} binary features (no truncation)")
         
-        print(f"📊 Using {len(available_features)} advanced features -> truncate to 38")
+        # Create binary feature matrix with exact columns
+        binary_features_df = pd.DataFrame()
+        missing_binary = 0
+        for col in binary_feature_cols:
+            if col in df.columns:
+                binary_features_df[col] = df[col]
+            else:
+                binary_features_df[col] = 0.0
+                missing_binary += 1
+                print(f"⚠️  Missing binary feature: {col}")
+        
+        if missing_binary > 0:
+            print(f"⚠️  Added {missing_binary} missing binary features as zeros")
         
         # Use fresh scaling on recent data (same as labeling script)
         from train_baseline import prepare_features
         
         latest_date = df['ts'].max()
         six_months_ago = latest_date - pd.DateOffset(months=6)
-        df_train_recent = df[df['ts'] >= six_months_ago].copy()
+        df_train_recent = binary_features_df[df['ts'] >= six_months_ago].copy()
         
         # Apply prepare_features with fresh scaling
-        train_features, fitted_scaler = prepare_features(df_train_recent, available_features, scaler=None, fit_scaler=True)
-        binary_features_scaled, _ = prepare_features(df, available_features, scaler=fitted_scaler, fit_scaler=False)
+        train_features, fitted_scaler = prepare_features(df_train_recent, binary_feature_cols, scaler=None, fit_scaler=True)
+        binary_features_scaled, _ = prepare_features(binary_features_df, binary_feature_cols, scaler=fitted_scaler, fit_scaler=False)
         
         # DEBUG: Check impact_proxy distribution in backtester
-        if 'impact_proxy' in available_features:
-            impact_proxy_idx = available_features.index('impact_proxy')
+        if 'impact_proxy' in binary_feature_cols:
+            impact_proxy_idx = binary_feature_cols.index('impact_proxy')
             if impact_proxy_idx < binary_features_scaled.shape[1]:
                 impact_proxy_values = binary_features_scaled[:, impact_proxy_idx]
                 print(f"🔍 BACKTESTER impact_proxy stats (after scaling):")
@@ -565,11 +579,9 @@ class TwoPhaseBacktester:
                     print(f"   Max: {raw_impact_proxy.max():.8f}")
                     print(f"   Std: {raw_impact_proxy.std():.8f}")
         
-        # Take first 37 features + add y_actionable=0 as 38th feature
-        binary_features_37 = binary_features_scaled[:, :37]  # First 37 features
-        y_actionable_col = np.zeros((binary_features_scaled.shape[0], 1))  # y_actionable = 0
-        binary_features_final = np.concatenate([binary_features_37, y_actionable_col], axis=1)
-        print(f"✅ Created 38 features: first 37 from advanced + y_actionable=0")
+        # Use ALL 38 features (no truncation needed - they're already exact)
+        binary_features_final = binary_features_scaled
+        print(f"✅ Created EXACT 38 binary features (no truncation)")
         
         # For directional model: create features matching the scaler's expected input
         directional_features_ordered = pd.DataFrame(index=df.index)
@@ -853,9 +865,22 @@ def load_live_data() -> pd.DataFrame:
     # Fill NaN values
     df = df.fillna(method='ffill').fillna(0)
     
-    # ==== Advanced directional features to mirror training ====
-    # Returns with additional lags
+    # ==== HARDCODE ALL 38 BINARY FEATURES EXACTLY ====
+    # Binary model expects these EXACT 38 features:
+    # 0: open, 1: volume, 2: quote_volume, 3: r1, 4: r2, 5: r5, 6: r10, 
+    # 7: range_pct, 8: body_pct, 9: rv, 10: vol_z, 11: avg_trade_size,
+    # 12: buy_vol, 13: sell_vol, 14: mean_size, 15: max_size, 16: p95_size, 
+    # 17: n_trades, 18: signed_vol, 19: imb_aggr, 20: CVD, 21: signed_volatility,
+    # 22: block_trades, 23: impact_proxy, 24: vw_tick_return, 25: vol_regime,
+    # 26: drawdown, 27: minute_sin, 28: minute_cos, 29: day_sin, 30: day_cos,
+    # 31: session_asia, 32: session_europe, 33: session_us, 34: price_position,
+    # 35: vol_concentration, 36: vol_entropy, 37: y_actionable
+    
+    print("🔧 Computing ALL 38 binary features exactly...")
+    
+    # Basic returns (already have r1)
     df['r2'] = df['close'].pct_change(2)
+    df['r5'] = df['close'].pct_change(5)
     df['r10'] = df['close'].pct_change(10)
 
     # Range and body relative to previous close
@@ -863,23 +888,12 @@ def load_live_data() -> pd.DataFrame:
     df['range_pct'] = (df['high'] - df['low']) / (prev_close + 1e-9)
     df['body_pct'] = (df['close'] - df['open']).abs() / (prev_close + 1e-9)
 
-    # ATR% (Wilder's ATR 14)
-    prev_close_fwd = df['close'].shift(1)
-    tr1 = df['high'] - df['low']
-    tr2 = (df['high'] - prev_close_fwd).abs()
-    tr3 = (df['low'] - prev_close_fwd).abs()
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(14, min_periods=1).mean()
-    df['atr_pct'] = atr / (df['close'] + 1e-9)
-
-    # Realized volatility within bar (approx using trades); fallback from returns if needed
-    if 'rv' not in df.columns:
-        df['rv'] = (df['r1']**2).rolling(5, min_periods=1).sum()
-
-    # Volume z-score and average trade size
+    # Volume z-score
     vol_ma = df['volume'].rolling(20, min_periods=5).mean()
     vol_sd = df['volume'].rolling(20, min_periods=5).std()
     df['vol_z'] = (df['volume'] - vol_ma) / (vol_sd + 1e-9)
+    
+    # Average trade size
     df['avg_trade_size'] = (df['tot_vol'] / (df['n_trades'].replace(0, np.nan))).fillna(0.0)
 
     # Volatility regime: 0=low,1=med,2=high based on rolling sigma tertiles
@@ -893,7 +907,7 @@ def load_live_data() -> pd.DataFrame:
     rolling_max = df['close'].cummax()
     df['drawdown'] = (df['close'] - rolling_max) / (rolling_max + 1e-9)
 
-    # Calendar encodings from ts
+    # Calendar encodings
     minute_of_day = df['ts'].dt.hour * 60 + df['ts'].dt.minute
     day_of_week = df['ts'].dt.dayofweek
     df['minute_sin'] = np.sin(2 * np.pi * minute_of_day / (24 * 60))
@@ -901,18 +915,21 @@ def load_live_data() -> pd.DataFrame:
     df['day_sin'] = np.sin(2 * np.pi * day_of_week / 7)
     df['day_cos'] = np.cos(2 * np.pi * day_of_week / 7)
 
-    # Sessions by hour
+    # Sessions
     hour = df['ts'].dt.hour
     df['session_asia'] = ((hour >= 0) & (hour < 8)).astype(int)
     df['session_europe'] = ((hour >= 8) & (hour < 16)).astype(int)
     df['session_us'] = ((hour >= 16) & (hour < 24)).astype(int)
 
-    # Price position and volume concentration/entropy
+    # Price position and volume features
     df['price_position'] = (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-9)
     df['vol_concentration'] = df['volume'] / (df['volume'].rolling(20, min_periods=5).mean() + 1e-9)
     df['vol_entropy'] = -(df['vol_concentration']) * np.log(df['vol_concentration'] + 1e-12)
+    
+    # y_actionable = 0 (will be added later)
+    df['y_actionable'] = 0
 
-    # Refill any NaNs created in advanced features
+    # Fill NaNs and infinities
     df = df.replace([np.inf, -np.inf], 0).fillna(0)
 
     # Apply same preprocessing as live script

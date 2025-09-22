@@ -969,6 +969,10 @@ class AdvancedFeatureEngine:
             # EXACT SAME LOGIC AS BACKTESTER calculate_trade_features_for_backtest()
             trades_df = self.trades_buffer.copy()
             
+            # Ensure datetime column is datetime type BEFORE converting to lowercase
+            if 'datetime' in trades_df.columns:
+                trades_df['datetime'] = pd.to_datetime(trades_df['datetime'])
+            
             # Convert column names to lowercase (like backtester does)
             trades_df.columns = trades_df.columns.str.lower()
             

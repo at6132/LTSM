@@ -428,7 +428,11 @@ class ModelInference:
                 self.binary_robust_scaler = binary_checkpoint.get('robust_scaler')
                 self.binary_standard_scaler = binary_checkpoint.get('standard_scaler')
                 self.feature_cols = binary_checkpoint.get('feature_cols', [])
+                # Get sequence length from model args (should be 120)
+                binary_args = binary_checkpoint.get('args')
+                self.binary_sequence_length_loaded = binary_args.sequence_length if binary_args else 120
                 logger.info(f"[AI] Binary model loaded with {len(self.feature_cols)} features")
+                logger.info(f"[DEBUG] Binary sequence length: {self.binary_sequence_length_loaded}")
                 logger.info(f"[DEBUG] Binary robust scaler loaded: {self.binary_robust_scaler is not None}")
                 logger.info(f"[DEBUG] Binary standard scaler loaded: {self.binary_standard_scaler is not None}")
                 if self.binary_robust_scaler:
@@ -1133,8 +1137,19 @@ class AdvancedFeatureEngine:
                 logger.info(f"[DEBUG] Using hardcoded {len(model_feature_cols)} features (fallback)")
             
             # STEP 1: Apply EXACT same preprocessing as backtester BEFORE creating feature matrix
-            # Get last 60 rows for sequence (like backtester)
-            sequence_data = df.tail(60).copy()
+            # Get sequence length from model checkpoint (should be 120, not 60!)
+            if hasattr(self, 'binary_sequence_length'):
+                seq_length = self.binary_sequence_length
+                logger.info(f"[DEBUG] Using checkpoint sequence length: {seq_length}")
+            else:
+                seq_length = 120  # Default from training
+                logger.info(f"[DEBUG] Using default sequence length: {seq_length}")
+            
+            if len(df) < seq_length:
+                logger.warning(f"[WARNING] Not enough data for sequence ({len(df)} < {seq_length})")
+                return None
+                
+            sequence_data = df.tail(seq_length).copy()
             
             # Apply preprocessing to the DataFrame FIRST (EXACT match with checkpoint features)
             # Based on debug output, the checkpoint uses these features:
@@ -1166,7 +1181,7 @@ class AdvancedFeatureEngine:
             sequence_data = sequence_data.fillna(method='ffill').fillna(0)
             
             # STEP 2: Create feature matrix from PREPROCESSED data
-            feature_matrix = np.zeros((60, len(model_feature_cols)))
+            feature_matrix = np.zeros((seq_length, len(model_feature_cols)))
             
             for i, col in enumerate(model_feature_cols):
                 if col == "y_actionable":
@@ -1342,10 +1357,11 @@ class LiveDOGETrader:
         self.feature_engine = AdvancedFeatureEngine(sequence_length=config["sequence_length"])
         self.position_manager = PositionManager(self.com_client)
         
-        # Pass both binary scalers and feature columns to feature engine
+        # Pass both binary scalers, feature columns, and sequence length to feature engine
         self.feature_engine.binary_robust_scaler = getattr(self.model_inference, 'binary_robust_scaler_loaded', None)
         self.feature_engine.binary_standard_scaler = getattr(self.model_inference, 'binary_standard_scaler_loaded', None)
         self.feature_engine.feature_cols = getattr(self.model_inference, 'feature_cols_loaded', [])
+        self.feature_engine.binary_sequence_length = getattr(self.model_inference, 'binary_sequence_length_loaded', 120)
         
         self.symbol = config["symbol"]
         self.max_positions = config.get("max_positions", 1)

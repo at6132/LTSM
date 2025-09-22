@@ -515,12 +515,16 @@ class TwoPhaseBacktester:
         
         # Prepare features for both models
         # For binary model: use truncation method (232 advanced -> first 38)
-        exclude_cols = ['ts', 'y_move', 'y_actionable', 'y_hit', 'y_tth', 'y_direction']
+        exclude_cols = ['ts', 'timestamp', 'datetime', 'candle_time',
+                        'y_move', 'y_actionable', 'y_hit', 'y_tth', 'y_direction']
         duplicate_features = ['high', 'low', 'close', 'tot_vol', 'atr_pct', 'dCVD']
         
-        # Get feature columns from advanced features (same as labeling script)
-        available_features = [col for col in df.columns 
-                            if col not in exclude_cols and col not in duplicate_features]
+        # Get feature columns from advanced features (same as labeling script), numeric only
+        available_features = [col for col in df.columns
+                              if col not in exclude_cols and col not in duplicate_features]
+        # Keep only numeric dtypes to avoid scaler errors on datetimes/objects
+        available_features = [col for col in available_features
+                              if np.issubdtype(df[col].dtype, np.number)]
         
         print(f"📊 Using {len(available_features)} advanced features -> truncate to 38")
         

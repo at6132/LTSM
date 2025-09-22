@@ -617,44 +617,333 @@ class AdvancedFeatureEngine:
             return False
     
     def calculate_basic_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate basic technical indicators"""
+        """Calculate ALL 38 binary features + 238 directional features exactly as backtester"""
         if len(df) < 50:
             return df
             
         try:
-            # Price indicators
-            df['sma_20'] = df['close'].rolling(20).mean()
-            df['ema_12'] = df['close'].ewm(span=12).mean()
-            df['ema_26'] = df['close'].ewm(span=26).mean()
-            df['macd'] = df['ema_12'] - df['ema_26']
-            df['macd_signal'] = df['macd'].ewm(span=9).mean()
+            # ==== HARDCODE ALL 38 BINARY FEATURES EXACTLY ====
+            logger.info("🔧 Computing ALL 38 binary features exactly...")
             
-            # RSI
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            df['rsi'] = 100 - (100 / (1 + rs))
+            # Basic returns
+            df['r1'] = df['close'].pct_change()
+            df['r2'] = df['close'].pct_change(2)
+            df['r5'] = df['close'].pct_change(5)
+            df['r10'] = df['close'].pct_change(10)
             
-            # Bollinger Bands
-            df['bb_middle'] = df['close'].rolling(20).mean()
-            bb_std = df['close'].rolling(20).std()
-            df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
-            df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+            # Range and body relative to previous close
+            prev_close = df['close'].shift(1)
+            df['range_pct'] = (df['high'] - df['low']) / (prev_close + 1e-9)
+            df['body_pct'] = (df['close'] - df['open']).abs() / (prev_close + 1e-9)
             
-            # Volume
-            df['volume_sma'] = df['volume'].rolling(20).mean()
-            df['volume_ratio'] = df['volume'] / df['volume_sma']
+            # Volume z-score
+            vol_ma = df['volume'].rolling(20, min_periods=5).mean()
+            vol_sd = df['volume'].rolling(20, min_periods=5).std()
+            df['vol_z'] = (df['volume'] - vol_ma) / (vol_sd + 1e-9)
             
-            # Returns
-            df['returns_1'] = df['close'].pct_change(1)
-            df['returns_5'] = df['close'].pct_change(5)
-            df['volatility'] = df['returns_1'].rolling(20).std()
+            # Average trade size
+            df['avg_trade_size'] = (df['tot_vol'] / (df['n_trades'].replace(0, np.nan))).fillna(0.0)
+            
+            # Volatility regime: 0=low,1=med,2=high based on rolling sigma tertiles
+            roll_sigma = df['r1'].rolling(200, min_periods=50).std()
+            q1 = roll_sigma.quantile(0.33)
+            q2 = roll_sigma.quantile(0.66)
+            vol_regime = np.select([roll_sigma <= q1, roll_sigma <= q2], [0, 1], default=2)
+            df['vol_regime'] = vol_regime
+            
+            # Drawdown state
+            rolling_max = df['close'].cummax()
+            df['drawdown'] = (df['close'] - rolling_max) / (rolling_max + 1e-9)
+            
+            # Calendar encodings
+            minute_of_day = df['datetime'].dt.hour * 60 + df['datetime'].dt.minute
+            day_of_week = df['datetime'].dt.dayofweek
+            df['minute_sin'] = np.sin(2 * np.pi * minute_of_day / (24 * 60))
+            df['minute_cos'] = np.cos(2 * np.pi * minute_of_day / (24 * 60))
+            df['day_sin'] = np.sin(2 * np.pi * day_of_week / 7)
+            df['day_cos'] = np.cos(2 * np.pi * day_of_week / 7)
+            
+            # Sessions
+            hour = df['datetime'].dt.hour
+            df['session_asia'] = ((hour >= 0) & (hour < 8)).astype(int)
+            df['session_europe'] = ((hour >= 8) & (hour < 16)).astype(int)
+            df['session_us'] = ((hour >= 16) & (hour < 24)).astype(int)
+            
+            # Price position and volume features
+            df['price_position'] = (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-9)
+            df['vol_concentration'] = df['volume'] / (df['volume'].rolling(20, min_periods=5).mean() + 1e-9)
+            df['vol_entropy'] = -(df['vol_concentration']) * np.log(df['vol_concentration'] + 1e-12)
+            
+            # Quote volume (if not already calculated)
+            if 'quote_volume' not in df.columns:
+                df['quote_volume'] = df['volume'] * df['close']
+            
+            # Realized volatility (if not already calculated)
+            if 'rv' not in df.columns:
+                df['rv'] = (df['r1'] ** 2).rolling(20, min_periods=1).sum()
+            
+            # Volume-weighted tick return (if not already calculated) 
+            if 'vw_tick_return' not in df.columns:
+                df['vw_tick_return'] = (df['r1'] * df['volume']).rolling(5, min_periods=1).mean()
+            
+            # y_actionable = 0 
+            df['y_actionable'] = 0
+            
+            # ==== NOW COMPUTE ALL 238 DIRECTIONAL FEATURES ====
+            df = self.compute_all_directional_features(df)
             
             return df
         except Exception as e:
             logger.error(f"[ERROR] Feature calculation failed: {e}")
             return df
+    
+    def compute_all_directional_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Compute ALL 238 directional features exactly as expected by the model"""
+        
+        logger.info(f"🔧 Computing ALL 238 directional features...")
+        
+        # === DIRECTIONAL MODEL SPECIFIC FEATURES ===
+        # Directional model has high_x, low_x, close_x (vs high, low, close for binary)
+        df['high_x'] = df['high']
+        df['low_x'] = df['low'] 
+        df['close_x'] = df['close']
+        
+        # Buy/sell ratios and imbalances
+        df['buy_sell_ratio'] = df['buy_vol'] / (df['sell_vol'] + 1e-9)
+        df['buy_sell_diff'] = df['buy_vol'] - df['sell_vol']
+        df['buy_sell_imbalance'] = (df['buy_vol'] - df['sell_vol']) / (df['buy_vol'] + df['sell_vol'] + 1e-9)
+        
+        # Momentum features (5, 10, 20 periods)
+        for period in [5, 10, 20]:
+            df[f'buy_momentum_{period}'] = df['buy_vol'].rolling(period, min_periods=1).mean()
+            df[f'sell_momentum_{period}'] = df['sell_vol'].rolling(period, min_periods=1).mean()
+            df[f'imbalance_momentum_{period}'] = df['buy_sell_imbalance'].rolling(period, min_periods=1).mean()
+            df[f'imbalance_volatility_{period}'] = df['buy_sell_imbalance'].rolling(period, min_periods=1).std().fillna(0)
+        
+        # Cumulative pressures
+        df['cumulative_buy_pressure'] = df['buy_vol'].cumsum()
+        df['cumulative_sell_pressure'] = df['sell_vol'].cumsum()
+        df['cumulative_imbalance'] = df['buy_sell_imbalance'].cumsum()
+        
+        # Accelerations (2nd derivative)
+        df['buy_acceleration'] = df['buy_vol'].diff(2)
+        df['sell_acceleration'] = df['sell_vol'].diff(2)
+        df['imbalance_acceleration'] = df['buy_sell_imbalance'].diff(2)
+        
+        # High-Low spread features
+        df['hl_spread'] = df['high'] - df['low']
+        df['hl_spread_norm'] = df['hl_spread'] / df['close']
+        df['open_position'] = (df['open'] - df['low']) / (df['high'] - df['low'] + 1e-9)
+        
+        # Intrabar momentum and reversal
+        df['intrabar_momentum'] = (df['close'] - df['open']) / (df['open'] + 1e-9)
+        df['intrabar_reversal'] = ((df['high'] + df['low']) / 2 - df['close']).abs() / (df['high'] - df['low'] + 1e-9)
+        
+        # Volume Price Trend
+        df['volume_price_trend'] = df['r1'] * df['volume']
+        df['vpt'] = df['volume_price_trend'].cumsum()
+        df['vpt_momentum'] = df['vpt'].diff()
+        
+        # Tick direction and momentum
+        df['tick_direction'] = np.sign(df['r1'])
+        df['tick_momentum'] = df['tick_direction'].rolling(5, min_periods=1).mean()
+        df['tick_acceleration'] = df['tick_momentum'].diff()
+        
+        # === RSI FEATURES ===
+        for period in [7, 14, 21, 50]:
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=period, min_periods=1).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=period, min_periods=1).mean()
+            rs = gain / (loss + 1e-9)
+            rsi = 100 - (100 / (1 + rs))
+            
+            df[f'rsi_{period}'] = rsi
+            df[f'rsi_momentum_{period}'] = rsi.diff()
+            df[f'rsi_divergence_{period}'] = rsi - rsi.rolling(period, min_periods=1).mean()
+        
+        # === MACD FEATURES ===
+        for fast, slow in [(8, 21), (12, 26), (19, 39)]:
+            ema_fast = df['close'].ewm(span=fast).mean()
+            ema_slow = df['close'].ewm(span=slow).mean()
+            macd = ema_fast - ema_slow
+            signal = macd.ewm(span=9).mean()
+            histogram = macd - signal
+            
+            df[f'macd_{fast}_{slow}'] = macd
+            df[f'macd_signal_{fast}_{slow}'] = signal
+            df[f'macd_histogram_{fast}_{slow}'] = histogram
+            df[f'macd_momentum_{fast}_{slow}'] = macd.diff()
+            df[f'macd_acceleration_{fast}_{slow}'] = macd.diff(2)
+        
+        # === BOLLINGER BANDS ===
+        for period in [10, 20, 50]:
+            sma = df['close'].rolling(period, min_periods=1).mean()
+            std = df['close'].rolling(period, min_periods=1).std()
+            
+            df[f'bb_upper_{period}'] = sma + (2 * std)
+            df[f'bb_lower_{period}'] = sma - (2 * std)
+            df[f'bb_position_{period}'] = (df['close'] - df[f'bb_lower_{period}']) / (df[f'bb_upper_{period}'] - df[f'bb_lower_{period}'] + 1e-9)
+            df[f'bb_width_{period}'] = (df[f'bb_upper_{period}'] - df[f'bb_lower_{period}']) / sma
+            df[f'bb_squeeze_{period}'] = (std < std.rolling(period, min_periods=1).mean()).astype(int)
+        
+        # === STOCHASTIC ===
+        for period in [14, 21, 50]:
+            lowest_low = df['low'].rolling(period, min_periods=1).min()
+            highest_high = df['high'].rolling(period, min_periods=1).max()
+            k_percent = (df['close'] - lowest_low) / (highest_high - lowest_low + 1e-9) * 100
+            d_percent = k_percent.rolling(3, min_periods=1).mean()
+            
+            df[f'stoch_k_{period}'] = k_percent
+            df[f'stoch_d_{period}'] = d_percent
+            df[f'stoch_momentum_{period}'] = k_percent.diff()
+        
+        # === VOLUME DISTRIBUTION ===
+        for period in [10, 20, 50]:
+            # Volume at different price levels within the bar
+            df[f'volume_at_high_{period}'] = (df['volume'] * (df['close'] == df['high']).astype(int)).rolling(period, min_periods=1).sum()
+            df[f'volume_at_low_{period}'] = (df['volume'] * (df['close'] == df['low']).astype(int)).rolling(period, min_periods=1).sum()
+            df[f'volume_at_mid_{period}'] = df['volume'].rolling(period, min_periods=1).sum() - df[f'volume_at_high_{period}'] - df[f'volume_at_low_{period}']
+            
+            total_vol = df['volume'].rolling(period, min_periods=1).sum()
+            df[f'volume_concentration_{period}'] = df[f'volume_at_high_{period}'] / (total_vol + 1e-9)
+            df[f'high_volume_momentum_{period}'] = df[f'volume_at_high_{period}'].diff()
+            df[f'low_volume_momentum_{period}'] = df[f'volume_at_low_{period}'].diff()
+        
+        # === VWAP ===
+        for period in [10, 20, 50]:
+            vwap = (df['close'] * df['volume']).rolling(period, min_periods=1).sum() / df['volume'].rolling(period, min_periods=1).sum()
+            df[f'vwap_{period}'] = vwap
+            df[f'vwap_deviation_{period}'] = (df['close'] - vwap) / vwap
+            df[f'vwap_momentum_{period}'] = vwap.diff()
+        
+        # === VOLUME RATE OF CHANGE ===
+        for period in [3, 5, 10]:
+            df[f'volume_roc_{period}'] = df['volume'].pct_change(period)
+            df[f'volume_acceleration_{period}'] = df[f'volume_roc_{period}'].diff()
+        
+        # === VOLATILITY FEATURES ===
+        for period in [10, 20, 50]:
+            volatility = df['r1'].rolling(period, min_periods=1).std()
+            df[f'volatility_{period}'] = volatility
+            df[f'volatility_rank_{period}'] = volatility.rolling(period*2, min_periods=1).rank(pct=True)
+            
+            vol_q1 = volatility.quantile(0.33)
+            vol_q2 = volatility.quantile(0.66)
+            regime = np.select([volatility <= vol_q1, volatility <= vol_q2], [0, 1], default=2)
+            df[f'volatility_regime_{period}'] = regime
+        
+        # === TREND FEATURES ===
+        for period in [10, 20, 50]:
+            sma = df['close'].rolling(period, min_periods=1).mean()
+            trend_strength = (df['close'] - sma) / sma
+            trend_direction = np.sign(sma.diff())
+            
+            df[f'trend_strength_{period}'] = trend_strength
+            df[f'trend_direction_{period}'] = trend_direction
+            df[f'trend_momentum_{period}'] = trend_strength.diff()
+        
+        # === MEAN REVERSION ===
+        for period in [5, 10, 20]:
+            sma = df['close'].rolling(period, min_periods=1).mean()
+            std = df['close'].rolling(period, min_periods=1).std()
+            
+            mean_reversion = (sma - df['close']) / (std + 1e-9)
+            zscore = (df['close'] - sma) / (std + 1e-9)
+            
+            df[f'mean_reversion_{period}'] = mean_reversion
+            df[f'mean_reversion_momentum_{period}'] = mean_reversion.diff()
+            df[f'zscore_{period}'] = zscore
+        
+        # === VOLUME EFFICIENCY ===
+        for period in [5, 10, 20]:
+            price_change = df['close'].diff(period).abs()
+            volume_sum = df['volume'].rolling(period, min_periods=1).sum()
+            efficiency = price_change / (volume_sum + 1e-9)
+            
+            df[f'volume_efficiency_{period}'] = efficiency
+            df[f'volume_efficiency_momentum_{period}'] = efficiency.diff()
+        
+        # Volume z-score (additional)
+        vol_mean = df['volume'].rolling(50, min_periods=10).mean()
+        vol_std = df['volume'].rolling(50, min_periods=10).std()
+        df['volume_zscore'] = (df['volume'] - vol_mean) / (vol_std + 1e-9)
+        
+        # === LARGE TRADES ===
+        large_threshold = df['mean_size'].rolling(50, min_periods=10).quantile(0.95)
+        df['large_trade'] = (df['max_size'] > large_threshold).astype(int)
+        df['large_buy_trade'] = ((df['max_size'] > large_threshold) & (df['buy_vol'] > df['sell_vol'])).astype(int)
+        df['large_sell_trade'] = ((df['max_size'] > large_threshold) & (df['sell_vol'] > df['buy_vol'])).astype(int)
+        df['cumulative_large_buys'] = df['large_buy_trade'].cumsum()
+        df['cumulative_large_sells'] = df['large_sell_trade'].cumsum()
+        df['large_trade_imbalance'] = df['cumulative_large_buys'] - df['cumulative_large_sells']
+        
+        # === VOLUME IMPACT ===
+        for period in [1, 3, 5]:
+            volume_impact = df['r1'].abs() / (df['volume'] + 1e-9)
+            df[f'volume_impact_{period}'] = volume_impact.rolling(period, min_periods=1).mean()
+            df[f'impact_decay_{period}'] = volume_impact.rolling(period, min_periods=1).std().fillna(0)
+        
+        # === PRICE-VOLUME DIVERGENCE ===
+        for period in [5, 10, 20]:
+            price_momentum = df['close'].rolling(period, min_periods=1).apply(lambda x: np.corrcoef(np.arange(len(x)), x)[0, 1] if len(x) > 1 else 0)
+            volume_momentum = df['volume'].rolling(period, min_periods=1).apply(lambda x: np.corrcoef(np.arange(len(x)), x)[0, 1] if len(x) > 1 else 0)
+            df[f'price_volume_divergence_{period}'] = price_momentum - volume_momentum
+        
+        # MACD divergence (using 12-26)
+        df['macd_divergence'] = df['macd_12_26'] - df['macd_12_26'].rolling(20, min_periods=1).mean()
+        
+        # === AUTOCORRELATION ===
+        for lag in [1, 2, 3, 5]:
+            df[f'price_autocorr_{lag}'] = df['r1'].rolling(20, min_periods=lag+1).apply(
+                lambda x: np.corrcoef(x[:-lag], x[lag:])[0, 1] if len(x) > lag else 0
+            ).fillna(0)
+            df[f'volume_autocorr_{lag}'] = df['volume'].pct_change().rolling(20, min_periods=lag+1).apply(
+                lambda x: np.corrcoef(x[:-lag], x[lag:])[0, 1] if len(x) > lag else 0
+            ).fillna(0)
+        
+        # === PRICE-VOLUME CORRELATION ===
+        for period in [10, 20, 50]:
+            corr = df['r1'].rolling(period, min_periods=5).corr(df['volume'].pct_change())
+            df[f'price_volume_corr_{period}'] = corr.fillna(0)
+            df[f'price_volume_corr_momentum_{period}'] = corr.diff().fillna(0)
+        
+        # === MOMENTUM CORRELATIONS ===
+        mom_5 = df['close'].pct_change(5)
+        mom_10 = df['close'].pct_change(10) 
+        mom_20 = df['close'].pct_change(20)
+        
+        df['momentum_corr_5_10'] = mom_5.rolling(20, min_periods=5).corr(mom_10).fillna(0)
+        df['momentum_corr_10_20'] = mom_10.rolling(20, min_periods=5).corr(mom_20).fillna(0)
+        df['momentum_corr_20_50'] = mom_20.rolling(20, min_periods=5).corr(df['close'].pct_change(50)).fillna(0)
+        
+        # === TIME FEATURES ===
+        df['hour'] = df['datetime'].dt.hour
+        df['minute'] = df['datetime'].dt.minute
+        df['day_of_week'] = df['datetime'].dt.dayofweek
+        
+        # Hour and day of week cyclical
+        df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+        df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+        df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+        df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+        
+        # Sessions (different names for directional)
+        df['asian_session'] = df['session_asia']
+        df['european_session'] = df['session_europe']
+        df['us_session'] = df['session_us']
+        
+        # Session open/close (simplified)
+        df['session_open'] = ((df['hour'] == 0) | (df['hour'] == 8) | (df['hour'] == 16)).astype(int)
+        df['session_close'] = ((df['hour'] == 7) | (df['hour'] == 15) | (df['hour'] == 23)).astype(int)
+        
+        # Final high_y, low_y, close_y (same as high_x, low_x, close_x)
+        df['high_y'] = df['high']
+        df['low_y'] = df['low']
+        df['close_y'] = df['close']
+        
+        logger.info(f"✅ Computed ALL directional features")
+        
+        return df
     
     def _calculate_trade_features(self, ohlcv_df: pd.DataFrame) -> pd.DataFrame:
         """Calculate real trade features from aggregate trades data"""

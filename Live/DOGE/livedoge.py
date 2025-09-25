@@ -1394,7 +1394,7 @@ class AdvancedFeatureEngine:
             # EXACT PREPROCESSING ORDER AS BACKTESTER:
             # 1. Calculate all features ✓ (already done)
             # 2. Apply volume scaling (/1e6)
-            # 3. Set impact_proxy = 0 (matching training data)
+            # 3. Use actual impact_proxy values (not set to 0)
             # 4. Clip outliers  
             # 5. Apply saved scalers
             
@@ -1434,9 +1434,9 @@ class AdvancedFeatureEngine:
                     # Always set y_actionable to 0 for binary model input
                     feature_matrix[:, i] = 0.0
                 elif col == "impact_proxy":
-                    # Step 3: Set impact_proxy to 0 to match training data (training had ~0 values with ~0 variance)
-                    feature_matrix[:, i] = 0.0
-                    logger.info(f"[DEBUG] Step 3: Set impact_proxy to 0 to match training distribution (training had ~0 variance)")
+                    # Use the actual calculated impact_proxy values (not set to 0)
+                    feature_matrix[:, i] = sequence_data[col].values
+                    logger.info(f"[DEBUG] Using actual impact_proxy values: mean={sequence_data[col].mean():.6f}, std={sequence_data[col].std():.6f}")
                 elif col in sequence_data.columns:
                     feature_matrix[:, i] = sequence_data[col].values
                 else:

@@ -14,6 +14,7 @@ Trading Parameters:
 """
 
 import argparse
+import logging
 import pandas as pd
 import numpy as np
 import torch
@@ -38,6 +39,57 @@ import time
 
 from train_baseline import BinaryMoveModel, BinaryMoveDataset, load_features_from_checkpoint, create_binary_targets
 from train_phase2_directional import TradingDirectionalModel, DirectionalDataset, create_directional_targets
+
+# --- Configure logging to both file and console, and tee print output to logger ---
+def _configure_logging_once():
+    try:
+        # Avoid re-configuring if already set
+        if getattr(_configure_logging_once, "_configured", False):
+            return
+        log_path = os.path.join("Live", "DOGE", "backtest_two_phase.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_path, mode='a', encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+
+        # Tee stdout/stderr prints to logger as INFO/ERROR
+        import sys
+        class _StreamToLogger:
+            def __init__(self, logger, level):
+                self.logger = logger
+                self.level = level
+                self._buffer = ""
+            def write(self, message):
+                if message is None:
+                    return
+                self._buffer += str(message)
+                while "\n" in self._buffer:
+                    line, self._buffer = self._buffer.split("\n", 1)
+                    line = line.rstrip()
+                    if line:
+                        self.logger.log(self.level, line)
+            def flush(self):
+                if self._buffer:
+                    msg = self._buffer.rstrip()
+                    self._buffer = ""
+                    if msg:
+                        self.logger.log(self.level, msg)
+
+        logger = logging.getLogger("backtester")
+        sys.stdout = _StreamToLogger(logger, logging.INFO)
+        sys.stderr = _StreamToLogger(logger, logging.ERROR)
+
+        _configure_logging_once._configured = True
+    except Exception:
+        # If logging setup fails, continue without failing the run
+        pass
+
+_configure_logging_once()
 
 class BacktestGUI:
     def __init__(self):

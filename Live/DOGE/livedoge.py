@@ -311,7 +311,7 @@ class COMClient:
         ).hexdigest()
         return signature
     
-    def create_order(self, symbol: str, side: str, order_type: str = "MARKET", price: Optional[float] = None) -> Dict:
+    def create_order(self, symbol: str, side: str, order_type: str = "MARKET", price: Optional[float] = None, tp_price: Optional[float] = None, sl_price: Optional[float] = None) -> Dict:
         method = "POST"
         path = "/api/v1/orders/orders"
         timestamp = int(time.time())
@@ -356,8 +356,8 @@ class COMClient:
                                 "value": 100.0
                             },
                             "trigger": {
-                                "type": "percentage",
-                                "value": 0.35  # 0.35% take profit
+                                "type": "price",
+                                "value": float(tp_price) if tp_price is not None else None
                             },
                             "exec": {
                                 "type": "MARKET",
@@ -372,8 +372,8 @@ class COMClient:
                                 "value": 100.0
                             },
                             "trigger": {
-                                "type": "percentage",
-                                "value": -2.0  # -2% stop loss
+                                "type": "price",
+                                "value": float(sl_price) if sl_price is not None else None
                             },
                             "exec": {
                                 "type": "MARKET",
@@ -1400,7 +1400,13 @@ class PositionManager:
         try:
             # Create market entry order (LIVE TRADE)
             logger.info(f"[COM] Sending LIVE TRADE market order: {side} {symbol}")
-            order_response = self.com_client.create_order(symbol, side, "MARKET")
+            # Compute absolute TP/SL prices from entry
+            tp_multiplier = 1.0035 if side == "BUY" else 0.9965
+            sl_multiplier = 0.98 if side == "BUY" else 1.02
+            tp_price = current_price * tp_multiplier
+            sl_price = current_price * sl_multiplier
+
+            order_response = self.com_client.create_order(symbol, side, "MARKET", tp_price=tp_price, sl_price=sl_price)
             
             if "error" in order_response:
                 logger.error(f"[❌ TRADE FAILED] Failed to open LIVE position: {order_response['error']} - BINARY MOVE WASTED!")
@@ -1411,14 +1417,7 @@ class PositionManager:
             
             position_ref = order_response.get("position_ref", f"live_pos_{int(time.time())}")
             
-            # Calculate TP price (0.35% away)
-            tp_multiplier = 1.0035 if side == "BUY" else 0.9965
-            tp_price = current_price * tp_multiplier
-            
-            # Create TP order (post-only limit order)
-            tp_side = "SELL" if side == "BUY" else "BUY"
-            logger.info(f"[COM] Sending LIVE TRADE TP order: {tp_side} {symbol} @ {tp_price:.6f}")
-            tp_response = self.com_client.create_order(symbol, tp_side, "LIMIT", tp_price)
+            # Store TP price used in exit plan
             
             # Store position info
             self.positions[position_ref] = {

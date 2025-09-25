@@ -775,6 +775,11 @@ class AdvancedFeatureEngine:
                 df['low'] = df['Low']
                 df['close'] = df['Close']
                 df['volume'] = df['Volume']
+                
+                # CRITICAL FIX: Scale MEXC live data to match Binance training data scale
+                # From overlapping time period analysis: Binance ~5.9M vs MEXC ~9.9K = 599.88x scaling factor
+                df['volume'] = df['volume'] * 599.88
+                
                 df['ts'] = df['Timestamp']
                 self.ohlcv_buffer = df.sort_values('datetime').tail(200)  # Keep more for indicators
                 return True
@@ -2097,10 +2102,21 @@ def load_config() -> Dict:
         "max_hold_minutes": 30,
     }
 
-async def main():
+async def main(args=None):
     logger.info("[START] Starting Live DOGE LIVE Trader")
     
     config = load_config()
+    
+    # Override CSV file names if using Binance data
+    if args and args.binance:
+        logger.info("[BINANCE] Using Binance data sources")
+        config["ohlcv_file"] = "binancedatadoge.csv"
+        config["trades_file"] = "binanceaggtradesdoge.csv"
+        logger.info(f"[BINANCE] OHLCV file: {config['ohlcv_file']}")
+        logger.info(f"[BINANCE] Trades file: {config['trades_file']}")
+    else:
+        logger.info("[MEXC] Using MEXC data sources")
+    
     trader = LiveDOGETrader(config)
     
     try:
@@ -2111,4 +2127,11 @@ async def main():
         logger.error(f"[ERROR] Fatal error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Live DOGE Trader')
+    parser.add_argument('--binance', action='store_true', 
+                       help='Use Binance data instead of MEXC data')
+    args = parser.parse_args()
+    
+    asyncio.run(main(args))

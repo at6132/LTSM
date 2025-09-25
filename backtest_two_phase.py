@@ -717,12 +717,6 @@ class TwoPhaseBacktester:
             
             # Check exit conditions if in position
             if self.position is not None:
-                # Time-based exit
-                time_in_position = (current_time - self.entry_time).total_seconds() / 60
-                if time_in_position >= max_hold_minutes:
-                    self.exit_position(current_price, current_time, "TIME_LIMIT")
-                    continue
-                
                 # Stop loss / Take profit using highs and lows (realistic)
                 current_high = current_row['high']
                 current_low = current_row['low']
@@ -733,16 +727,27 @@ class TwoPhaseBacktester:
                     if current_high >= target_price:
                         self.exit_position(target_price, current_time, "TAKE_PROFIT")
                         continue
-                        
                 else:  # SHORT
                     # Only check take profit with current bar's low (NO STOP LOSS)
                     target_price = self.entry_price * (1 - take_profit_pct)
                     if current_low <= target_price:
                         self.exit_position(target_price, current_time, "TAKE_PROFIT")
                         continue
+
+                # Time-based exit (evaluate after TP/SL)
+                time_in_position = (current_time - self.entry_time).total_seconds() / 60
+                if time_in_position >= max_hold_minutes:
+                    self.exit_position(current_price, current_time, "TIME_LIMIT")
+                    continue
             
             # Only look for new entries if not in position
             if self.position is None:
+                # Require each of the last N minutes to have aggtrade activity
+                window_start = i - self.binary_sequence_length + 1
+                recent = df.iloc[window_start:i+1]
+                recent_has_trades = ((recent['buy_vol'] != 0) | (recent['sell_vol'] != 0)).all()
+                if not recent_has_trades:
+                    continue
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]
 
@@ -1060,18 +1065,8 @@ def load_live_data() -> pd.DataFrame:
             p1, p99 = np.percentile(df[col].dropna(), [1, 99])
             df[col] = df[col].clip(p1, p99)
     
-    # FILTER TO ONLY CANDLES WITH TRADE DATA
-    print(f"🔧 Filtering to candles with trade data...")
-    print(f"   Before filtering: {len(df)} candles")
-    
-    # Keep only candles that have trade data (non-zero buy_vol or sell_vol or signed_vol)
-    has_trades = (df['buy_vol'] != 0) | (df['sell_vol'] != 0) | (df['signed_vol'] != 0)
-    df = df[has_trades].copy()
-    
-    print(f"   After filtering: {len(df)} candles with trade data")
-    print(f"   Filtered period: {df['ts'].min()} to {df['ts'].max()}")
-    
-    print(f"✅ Live data processed: {len(df)} samples with {len(df.columns)} features")
+    # DO NOT filter out candles. Keep full minute bars for realistic exits.
+    print(f"✅ Live data processed: {len(df)} samples with {len(df.columns)} features (no candle filtering)")
     print(f"   Period: {df['ts'].min()} to {df['ts'].max()}")
     print(f"   Feature ranges after preprocessing:")
     for col in ['r1', 'volume', 'buy_vol', 'sell_vol', 'impact_proxy', 'signed_volatility']:

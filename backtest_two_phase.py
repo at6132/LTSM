@@ -550,16 +550,24 @@ class TwoPhaseBacktester:
         # Store for final summary
         self.missing_binary_features = missing_binary
         
-        # Use fresh scaling on recent data (same as labeling script)
-        from train_baseline import prepare_features
+        # Use SAVED scalers from checkpoint (not fresh scaling)
+        print(f"🔧 Using SAVED scalers from binary model checkpoint")
         
-        latest_date = df['ts'].max()
-        six_months_ago = latest_date - pd.DateOffset(months=6)
-        df_train_recent = binary_features_df[df['ts'] >= six_months_ago].copy()
+        # Apply preprocessing (volume scaling, outlier clipping) exactly as in training
+        volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                          'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
         
-        # Apply prepare_features with fresh scaling
-        train_features, fitted_scaler = prepare_features(df_train_recent, binary_feature_cols, scaler=None, fit_scaler=True)
-        binary_features_scaled, _ = prepare_features(binary_features_df, binary_feature_cols, scaler=fitted_scaler, fit_scaler=False)
+        binary_features_processed = binary_features_df.copy()
+        for col in binary_features_processed.columns:
+            if col in volume_features:
+                binary_features_processed[col] = binary_features_processed[col] / 1e6
+            elif binary_features_processed[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                p1, p99 = np.percentile(binary_features_processed[col], [1, 99])
+                binary_features_processed[col] = binary_features_processed[col].clip(p1, p99)
+        
+        # Apply the SAVED scalers (no fitting!)
+        features_robust_scaled = self.binary_robust_scaler.transform(binary_features_processed)
+        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
         
         # DEBUG: Log actual model input values for comparison with live trader
         print(f"🔧 [BACKTESTER] ACTUAL MODEL INPUT features after prepare_features:")
@@ -665,10 +673,8 @@ class TwoPhaseBacktester:
         
         print(f"✅ Features prepared for both phases")
         
-        # Mirror live: mark candles that have aggtrade activity and a rolling window condition
+        # Mirror live: mark candles that have aggtrade activity
         df['has_trades'] = ((df['buy_vol'] != 0) | (df['sell_vol'] != 0)).astype(int)
-        # Rolling count of trade-active minutes over the binary window
-        df['consec_trades_ok'] = df['has_trades'].rolling(self.binary_sequence_length, min_periods=self.binary_sequence_length).sum() == self.binary_sequence_length
         
         # Main backtesting loop
         total_bars = len(df)
@@ -747,8 +753,16 @@ class TwoPhaseBacktester:
             
             # Only look for new entries if not in position
             if self.position is None:
-                # Require last N minutes to have aggtrade activity (exactly like live)
-                if not df.iloc[i]['consec_trades_ok']:
+                # Require last N minutes to have aggtrade activity (exactly like live):
+                # Count backward from current bar; break immediately on first gap
+                consecutive_with_trades = 0
+                for k in range(self.binary_sequence_length):
+                    row = df.iloc[i - k]
+                    if (row['buy_vol'] != 0) or (row['sell_vol'] != 0):
+                        consecutive_with_trades += 1
+                    else:
+                        break
+                if consecutive_with_trades < self.binary_sequence_length:
                     continue
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]

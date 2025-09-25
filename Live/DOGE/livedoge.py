@@ -418,6 +418,78 @@ class COMClient:
             return {"error": str(e)}
     
 
+class COMWebSocketClient:
+    """Authenticated WebSocket client for COM position/order updates"""
+    def __init__(self, base_url: str, api_key: str, secret_key: str, strategy_id: str, on_event=None):
+        # Convert http(s)://host to ws(s)://host
+        if base_url.startswith("https://"):
+            self.ws_base = base_url.replace("https://", "wss://")
+        elif base_url.startswith("http://"):
+            self.ws_base = base_url.replace("http://", "ws://")
+        else:
+            self.ws_base = base_url
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.strategy_id = strategy_id
+        self.on_event = on_event
+        self._task = None
+
+    def _create_ws_signature(self, timestamp: int, key_id: str) -> str:
+        data_string = f"{key_id}\n{timestamp}"
+        return hmac.new(self.secret_key.encode("utf-8"), data_string.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    async def connect_and_listen(self):
+        try:
+            import websockets  # lazy import to avoid hard dep at module import time
+        except Exception as e:
+            logger.error(f"[WS] websockets library missing: {e}")
+            return
+
+        uri = f"{self.ws_base}/api/v1/stream"
+        while True:
+            try:
+                async with websockets.connect(uri) as ws:
+                    # AUTH
+                    ts = int(time.time())
+                    signature = self._create_ws_signature(ts, self.api_key)
+                    auth_msg = {"type": "AUTH", "key_id": self.api_key, "ts": ts, "signature": signature}
+                    await ws.send(json.dumps(auth_msg))
+                    auth_resp = json.loads(await ws.recv())
+                    if auth_resp.get("status") != "AUTH_ACK":
+                        logger.error(f"[WS] AUTH failed: {auth_resp}")
+                        await asyncio.sleep(5)
+                        continue
+                    # SUBSCRIBE
+                    sub_msg = {"type": "SUBSCRIBE", "strategy_id": self.strategy_id}
+                    await ws.send(json.dumps(sub_msg))
+                    sub_resp = json.loads(await ws.recv())
+                    if sub_resp.get("status") != "SUBSCRIBED":
+                        logger.error(f"[WS] SUBSCRIBE failed: {sub_resp}")
+                        await asyncio.sleep(5)
+                        continue
+                    logger.info("[WS] Subscribed to COM stream")
+
+                    # Listen loop
+                    while True:
+                        raw = await ws.recv()
+                        try:
+                            event = json.loads(raw)
+                        except Exception:
+                            logger.debug(f"[WS] Non-JSON message: {raw}")
+                            continue
+
+                        etype = event.get("type")
+                        if self.on_event:
+                            try:
+                                await self.on_event(event)
+                            except Exception as cb_err:
+                                logger.error(f"[WS] on_event error: {cb_err}")
+                        else:
+                            logger.debug(f"[WS] Event: {event}")
+            except Exception as e:
+                logger.error(f"[WS] Connection error: {e}")
+                await asyncio.sleep(5)
+
 class ModelInference:
     def __init__(self, binary_model_path: str, directional_model_path: str):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1449,6 +1521,22 @@ class PositionManager:
     def get_open_positions_count(self) -> int:
         return len([p for p in self.positions.values() if p["status"] == "OPEN"])
 
+    async def apply_ws_event(self, event: Dict):
+        etype = event.get("type")
+        # POSITION_UPDATE with data.size, status, etc.
+        if etype == "POSITION_UPDATE":
+            data = event.get("data", {})
+            position_id = event.get("position_id") or event.get("position_ref")
+            if position_id and position_id in self.positions:
+                if data.get("status") == "CLOSED" or data.get("size") == 0:
+                    self.positions[position_id]["status"] = "CLOSED"
+                    logger.info(f"[WS] Position {position_id} closed via WS update")
+        elif etype == "POSITION_CLEANUP":
+            position_id = event.get("position_id")
+            if position_id and position_id in self.positions:
+                self.positions[position_id]["status"] = "CLOSED"
+                logger.info(f"[WS] Position {position_id} cleanup -> CLOSED")
+
 class LiveDOGETrader:
     def __init__(self, config: Dict):
         self.com_client = COMClient(
@@ -1476,6 +1564,14 @@ class LiveDOGETrader:
         self.max_hold_minutes = config.get("max_hold_minutes", 30)
         self.ohlcv_file = config["ohlcv_file"]
         self.trades_file = config["trades_file"]
+        # WebSocket client for COM updates
+        self.ws_client = COMWebSocketClient(
+            base_url=config["com_base_url"],
+            api_key=config["api_key"],
+            secret_key=config["secret_key"],
+            strategy_id=config.get("strategy_id", "LTSM"),
+            on_event=self._on_ws_event
+        )
         
         self.running = False
         self.last_candle_time = None
@@ -1642,6 +1738,8 @@ class LiveDOGETrader:
         logger.info("[STARTUP] Skipping retroactive calculation - starting live trading directly")
         
         logger.info("[LIVE] Starting LIVE trading loop...")
+        # Start WS client in background
+        asyncio.create_task(self.ws_client.connect_and_listen())
         while self.running:
             try:
                 # Update data from CSV files
@@ -1712,6 +1810,13 @@ class LiveDOGETrader:
                 await asyncio.sleep(30)
         
         logger.info("[FINISH] LIVE trading stopped")
+
+    async def _on_ws_event(self, event: Dict):
+        # Forward WS events to PositionManager
+        try:
+            await self.position_manager.apply_ws_event(event)
+        except Exception as e:
+            logger.error(f"[WS] Failed to apply WS event: {e}")
     
     async def process_new_candle(self):
         """Process each new candle with full feature window"""

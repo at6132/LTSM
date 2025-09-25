@@ -955,14 +955,20 @@ class TwoPhaseBacktester:
             'trades': trades_df.to_dict('records')
         }
 
-def load_live_data() -> pd.DataFrame:
+def load_live_data(use_binance=False) -> pd.DataFrame:
     """Load live data from CSV files in Live/DOGE/ directory"""
     import os
     
-    print(f"🔴 Loading LIVE data from CSV files...")
+    if use_binance:
+        print(f"🔴 Loading BINANCE LIVE data from CSV files...")
+        ohlcv_path = "Live/DOGE/binancedatadoge.csv"
+        trades_path = "Live/DOGE/binanceaggtradesdoge.csv"
+    else:
+        print(f"🔴 Loading MEXC LIVE data from CSV files...")
+        ohlcv_path = "Live/DOGE/datadoge.csv"
+        trades_path = "Live/DOGE/aggtradesdoge.csv"
     
     # Load OHLCV data
-    ohlcv_path = "Live/DOGE/datadoge.csv"
     if not os.path.exists(ohlcv_path):
         raise FileNotFoundError(f"Live OHLCV data not found: {ohlcv_path}")
     
@@ -970,7 +976,6 @@ def load_live_data() -> pd.DataFrame:
     print(f"✅ Loaded OHLCV data: {len(ohlcv_df)} candles")
     
     # Load aggregate trades data
-    trades_path = "Live/DOGE/aggtradesdoge.csv"
     if not os.path.exists(trades_path):
         raise FileNotFoundError(f"Live trades data not found: {trades_path}")
     
@@ -1001,7 +1006,9 @@ def load_live_data() -> pd.DataFrame:
     
     # CRITICAL FIX: Scale MEXC live data to match Binance training data scale
     # From overlapping time period analysis: Binance ~5.9M vs MEXC ~9.9K = 599.88x scaling factor
-    df['volume'] = df['volume'] * 599.88
+    # This scaling must happen BEFORE the /1e6 preprocessing step
+    # TESTING: Try smaller scaling factor first to debug scaler issue
+    df['volume'] = df['volume'] * 100  # Test with 100x instead of 599.88x
     
     # Add basic technical indicators
     df['r1'] = df['close'].pct_change()
@@ -1859,6 +1866,7 @@ def main():
     parser.add_argument("--take_profit", type=float, default=0.035)
     parser.add_argument("--gui", action="store_true", help="Run with live GUI")
     parser.add_argument("--live", action="store_true", help="Use live data from Live/DOGE/ directory instead of parquet files")
+    parser.add_argument("--binance", action="store_true", help="Use Binance data files (binancedatadoge.csv, binanceaggtradesdoge.csv) instead of MEXC data")
     parser.add_argument("--raw", action="store_true", help="Use raw OHLCV and aggtrades from data_parquet/ instead of precomputed features")
     
     args = parser.parse_args()
@@ -1876,8 +1884,11 @@ def main():
     
     # Load data - either live CSV files or 2025 parquet data
     if args.live:
-        print("🔴 LIVE MODE: Using CSV data from Live/DOGE/ directory")
-        df_2025 = load_live_data()
+        if args.binance:
+            print("🔴 LIVE MODE: Using BINANCE CSV data from Live/DOGE/ directory")
+        else:
+            print("🔴 LIVE MODE: Using MEXC CSV data from Live/DOGE/ directory")
+        df_2025 = load_live_data(use_binance=args.binance)
     elif args.raw:
         print("🔴 RAW MODE: Using raw parquet data from data_parquet/ directory")
         df_2025 = load_raw_data(args.symbol, args.interval)

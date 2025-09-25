@@ -999,6 +999,10 @@ def load_live_data() -> pd.DataFrame:
     df['close'] = df['close'].astype(float)
     df['volume'] = df['volume'].astype(float)
     
+    # CRITICAL FIX: Scale MEXC live data to match Binance training data scale
+    # From overlapping time period analysis: Binance ~5.9M vs MEXC ~9.9K = 599.88x scaling factor
+    df['volume'] = df['volume'] * 599.88
+    
     # Add basic technical indicators
     df['r1'] = df['close'].pct_change()
     df['r5'] = df['close'].pct_change(5)

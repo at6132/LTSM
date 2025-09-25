@@ -665,6 +665,11 @@ class TwoPhaseBacktester:
         
         print(f"✅ Features prepared for both phases")
         
+        # Mirror live: mark candles that have aggtrade activity and a rolling window condition
+        df['has_trades'] = ((df['buy_vol'] != 0) | (df['sell_vol'] != 0)).astype(int)
+        # Rolling count of trade-active minutes over the binary window
+        df['consec_trades_ok'] = df['has_trades'].rolling(self.binary_sequence_length, min_periods=self.binary_sequence_length).sum() == self.binary_sequence_length
+        
         # Main backtesting loop
         total_bars = len(df)
         start_bar = max(self.binary_sequence_length, self.directional_sequence_length)
@@ -742,11 +747,8 @@ class TwoPhaseBacktester:
             
             # Only look for new entries if not in position
             if self.position is None:
-                # Require each of the last N minutes to have aggtrade activity
-                window_start = i - self.binary_sequence_length + 1
-                recent = df.iloc[window_start:i+1]
-                recent_has_trades = ((recent['buy_vol'] != 0) | (recent['sell_vol'] != 0)).all()
-                if not recent_has_trades:
+                # Require last N minutes to have aggtrade activity (exactly like live)
+                if not df.iloc[i]['consec_trades_ok']:
                     continue
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]

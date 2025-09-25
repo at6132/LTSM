@@ -1645,9 +1645,33 @@ class LiveDOGETrader:
                     latest_candle_time = self.feature_engine.ohlcv_buffer['datetime'].iloc[-1]
                     logger.info(f"[DEBUG] Latest candle time: {latest_candle_time}, Last processed: {self.last_candle_time}")
                     
+                    # Check if latest candle has trade data
+                    latest_candle_trades = self.feature_engine.trades_buffer[
+                        self.feature_engine.trades_buffer['datetime'].dt.floor('1min') == latest_candle_time
+                    ]
+                    
+                    if len(latest_candle_trades) == 0:
+                        logger.info(f"[DEBUG] Latest candle {latest_candle_time} has NO trade data - skipping")
+                        await asyncio.sleep(5)
+                        continue
+                    
+                    # Check if we have at least 60 candles with trade data
+                    candles_with_trades = []
+                    for candle_time in self.feature_engine.ohlcv_buffer['datetime']:
+                        candle_trades = self.feature_engine.trades_buffer[
+                            self.feature_engine.trades_buffer['datetime'].dt.floor('1min') == candle_time
+                        ]
+                        if len(candle_trades) > 0:
+                            candles_with_trades.append(candle_time)
+                    
+                    if len(candles_with_trades) < 60:
+                        logger.info(f"[DEBUG] Only {len(candles_with_trades)} candles with trade data available (need 60) - waiting")
+                        await asyncio.sleep(5)
+                        continue
+                    
                     # Process new candle
                     if self.last_candle_time is None or latest_candle_time > self.last_candle_time:
-                        logger.info(f"[DEBUG] NEW CANDLE DETECTED! Processing candle: {latest_candle_time}")
+                        logger.info(f"[DEBUG] NEW CANDLE DETECTED! Processing candle: {latest_candle_time} (has {len(latest_candle_trades)} trades)")
                         self.last_candle_time = latest_candle_time
                         await self.process_new_candle()
                     else:

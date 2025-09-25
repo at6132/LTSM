@@ -350,8 +350,15 @@ class TwoPhaseBacktester:
             outputs = self.binary_model(sequence_tensor)
             move_logits = outputs['move']
             
+            # Debug: Log confidence scores
+            move_probs = torch.softmax(move_logits, dim=1).cpu().numpy()[0]
+            move_confidence = move_probs[1]  # Probability of move (class 1)
+            
             # Use ARGMAX for predictions (same as training evaluation)
             move_prediction = np.argmax(move_logits.cpu().numpy(), axis=1)[0]
+            
+            # Debug: Log prediction details
+            print(f"🔧 [BINARY MODEL] Logits: {move_logits.cpu().numpy()[0]}, Probs: {move_probs}, Confidence: {move_confidence:.3f}, Prediction: {move_prediction}")
             
             return move_prediction  # Returns 0 or 1 directly
     
@@ -792,6 +799,10 @@ class TwoPhaseBacktester:
                     print(f"[CSV] Failed to write backtest binary_input: {e}")
 
                 move_prediction = self.predict_move(binary_sequence)
+                
+                # Debug: Log prediction details for first few attempts
+                if i < 100:  # Only log first 100 attempts to avoid spam
+                    print(f"🔧 [DEBUG] Candle {i} ({current_time}): Binary prediction = {move_prediction}")
                 
                 if move_prediction == 1:  # Move detected (same as labeling script)
                     # Phase 2: Get direction prediction using ARGMAX (no threshold!)

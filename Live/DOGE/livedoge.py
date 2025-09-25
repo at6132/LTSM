@@ -1110,13 +1110,16 @@ class AdvancedFeatureEngine:
             # 1. Core OHLCV Features (EXACT same as build_features.py)
             df["quote_volume"] = df["volume"] * df["close"]  # Calculate quote_volume!
             
-            df["r1"] = np.log(df["close"]).diff()
-            df["r2"] = df["r1"].rolling(2).sum()
-            df["r5"] = df["r1"].rolling(5).sum()
-            df["r10"] = df["r1"].rolling(10).sum()
+            # Calculate returns EXACTLY like backtester (percentage changes, NOT log returns!)
+            df["r1"] = df["close"].pct_change()     # 1-period percentage return
+            df["r2"] = df["close"].pct_change(2)    # 2-period percentage return  
+            df["r5"] = df["close"].pct_change(5)    # 5-period percentage return
+            df["r10"] = df["close"].pct_change(10)  # 10-period percentage return
             
-            df["range_pct"] = (df["high"] - df["low"]) / df["close"].shift(1)
-            df["body_pct"] = abs(df["close"] - df["open"]) / df["close"].shift(1)
+            # Fix range_pct and body_pct to match backtester exactly (with epsilon)
+            prev_close = df["close"].shift(1)
+            df["range_pct"] = (df["high"] - df["low"]) / (prev_close + 1e-9)
+            df["body_pct"] = (df["close"] - df["open"]).abs() / (prev_close + 1e-9)
             df["atr_pct"] = (df["high"].combine(df["low"], max) - 
                            df["low"].combine(df["high"], min)) / df["close"].shift(1)
             df["rv"] = df["r1"].pow(2)
@@ -1163,9 +1166,9 @@ class AdvancedFeatureEngine:
                 logger.info(f"[DEBUG] Using MAIN HUB feature columns: {len(model_feature_cols)} features")
             
             # STEP 1: Apply EXACT same preprocessing as backtester BEFORE creating feature matrix
-            # Use sequence length from checkpoint (confirmed to be 60)
-            seq_length = 60  # This is what's actually in the checkpoint
-            logger.info(f"[DEBUG] Using CONFIRMED sequence length from checkpoint: {seq_length}")
+            # Use sequence length from checkpoint (self.binary_sequence_length)
+            seq_length = self.binary_sequence_length  # Use the actual checkpoint value
+            logger.info(f"[DEBUG] Using sequence length from checkpoint: {seq_length}")
             
             if len(df) < seq_length:
                 logger.warning(f"[WARNING] Not enough data for sequence ({len(df)} < {seq_length})")
@@ -1173,8 +1176,14 @@ class AdvancedFeatureEngine:
                 
             sequence_data = df.tail(seq_length).copy()
             
-            # Apply preprocessing to the DataFrame FIRST (EXACT match with checkpoint features)
-            # Based on debug output, the checkpoint uses these features:
+            # EXACT PREPROCESSING ORDER AS BACKTESTER:
+            # 1. Calculate all features ✓ (already done)
+            # 2. Apply volume scaling (/1e6)
+            # 3. Set impact_proxy = 0 (matching training data)
+            # 4. Clip outliers  
+            # 5. Apply saved scalers
+            
+            # Step 2: Volume scaling
             volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
                               'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD', 'signed_volatility']  # Complete list
             
@@ -1210,9 +1219,9 @@ class AdvancedFeatureEngine:
                     # Always set y_actionable to 0 for binary model input
                     feature_matrix[:, i] = 0.0
                 elif col == "impact_proxy":
-                    # Set impact_proxy to 0 to match training data (training had ~0 values with ~0 variance)
+                    # Step 3: Set impact_proxy to 0 to match training data (training had ~0 values with ~0 variance)
                     feature_matrix[:, i] = 0.0
-                    logger.info(f"[DEBUG] Set impact_proxy to 0 to match training distribution (training had ~0 variance)")
+                    logger.info(f"[DEBUG] Step 3: Set impact_proxy to 0 to match training distribution (training had ~0 variance)")
                 elif col in sequence_data.columns:
                     feature_matrix[:, i] = sequence_data[col].values
                 else:
@@ -1253,6 +1262,13 @@ class AdvancedFeatureEngine:
                 # Apply saved StandardScaler
                 features_final = self.binary_standard_scaler.transform(features_robust_scaled)
                 logger.info(f"[DEBUG] Applied StandardScaler - stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
+                
+                # Add debug logging for key feature distributions (COMPARE WITH BACKTESTER)
+                logger.info(f"[LIVE] Feature stats - r1: mean={df['r1'].iloc[-60:].mean():.6f}, std={df['r1'].iloc[-60:].std():.6f}")
+                logger.info(f"[LIVE] Feature stats - r2: mean={df['r2'].iloc[-60:].mean():.6f}, std={df['r2'].iloc[-60:].std():.6f}")
+                logger.info(f"[LIVE] Feature stats - volume: mean={df['volume'].iloc[-60:].mean():.6f}, std={df['volume'].iloc[-60:].std():.6f}")
+                logger.info(f"[LIVE] Feature stats - range_pct: mean={df['range_pct'].iloc[-60:].mean():.6f}, std={df['range_pct'].iloc[-60:].std():.6f}")
+                logger.info(f"[LIVE] Feature stats - impact_proxy: mean={df['impact_proxy'].iloc[-60:].mean():.6f}, std={df['impact_proxy'].iloc[-60:].std():.6f}")
                 
                 return features_final  # Return the full sequence (60, 38)
             else:

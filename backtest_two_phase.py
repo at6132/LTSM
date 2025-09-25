@@ -492,7 +492,7 @@ class TwoPhaseBacktester:
                     direction_threshold: float = 0.55,
                     max_hold_minutes: int = 30,
                     stop_loss_pct: float = 0.015,
-                    take_profit_pct: float = 0.035) -> Dict:
+                    take_profit_pct: float = 0.0035) -> Dict:
         """
         Run the two-phase backtest on the provided data.
         
@@ -502,7 +502,7 @@ class TwoPhaseBacktester:
             direction_threshold: Minimum confidence for Phase 2 direction (0-1)
             max_hold_minutes: Maximum time to hold a position
             stop_loss_pct: Stop loss percentage (e.g., 0.015 = 1.5%)
-            take_profit_pct: Take profit percentage (e.g., 0.035 = 3.5%)
+            take_profit_pct: Take profit percentage (e.g., 0.0035 = 0.35%)
         """
         
         print(f"🚀 Running Two-Phase Backtest")
@@ -744,11 +744,35 @@ class TwoPhaseBacktester:
             if self.position is None:
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]
+
+                # Export exact binary inputs (flattened) sent to model
+                try:
+                    export_row = {"candle_time": str(current_time), "type": "binary_input"}
+                    # Flatten with featureName_t-59 ... featureName_t
+                    for t in range(-self.binary_sequence_length, 0):
+                        for j, col in enumerate(self.binary_feature_cols):
+                            export_row[f"{col}_{t}"] = float(binary_sequence[t][j])
+                    out_path = os.path.join("Live", "DOGE", "backtest_binary_inputs.csv")
+                    pd.DataFrame([export_row]).to_csv(out_path, mode='a', header=not os.path.exists(out_path), index=False)
+                except Exception as e:
+                    print(f"[CSV] Failed to write backtest binary_input: {e}")
+
                 move_prediction = self.predict_move(binary_sequence)
                 
                 if move_prediction == 1:  # Move detected (same as labeling script)
                     # Phase 2: Get direction prediction using ARGMAX (no threshold!)
                     directional_sequence = directional_features_final[i-self.directional_sequence_length+1:i+1]
+
+                    # Export exact directional inputs (flattened)
+                    try:
+                        export_row = {"candle_time": str(current_time), "type": "directional_input"}
+                        for k, val in enumerate(directional_sequence.reshape(-1).tolist()):
+                            export_row[f"f{k}"] = float(val)
+                        out_path = os.path.join("Live", "DOGE", "backtest_directional_inputs.csv")
+                        pd.DataFrame([export_row]).to_csv(out_path, mode='a', header=not os.path.exists(out_path), index=False)
+                    except Exception as e:
+                        print(f"[CSV] Failed to write backtest directional_input: {e}")
+
                     direction, direction_pred = self.predict_direction(directional_sequence)
                     
                     if direction != 'HOLD':  # Always take the ARGMAX prediction

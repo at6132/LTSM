@@ -433,6 +433,9 @@ class COMWebSocketClient:
         self.strategy_id = strategy_id
         self.on_event = on_event
         self._task = None
+        self.connected = False
+        self.last_heartbeat = None
+        self.reconnect_count = 0
 
     def _create_ws_signature(self, timestamp: int, key_id: str) -> str:
         data_string = f"{key_id}\n{timestamp}"
@@ -448,46 +451,113 @@ class COMWebSocketClient:
         uri = f"{self.ws_base}/api/v1/stream"
         while True:
             try:
+                self.reconnect_count += 1
+                logger.info(f"[WS] Attempting connection #{self.reconnect_count} to {uri}")
                 async with websockets.connect(uri) as ws:
+                    self.connected = True
+                    logger.info("[WS] WebSocket connected successfully")
                     # AUTH
                     ts = int(time.time())
                     signature = self._create_ws_signature(ts, self.api_key)
                     auth_msg = {"type": "AUTH", "key_id": self.api_key, "ts": ts, "signature": signature}
-                    await ws.send(json.dumps(auth_msg))
-                    auth_resp = json.loads(await ws.recv())
+                    auth_json = json.dumps(auth_msg)
+                    logger.info(f"[WS SEND] AUTH: {auth_json}")
+                    await ws.send(auth_json)
+                    
+                    auth_raw = await ws.recv()
+                    logger.info(f"[WS RAW] AUTH Response: {auth_raw}")
+                    auth_resp = json.loads(auth_raw)
+                    logger.info(f"[WS PARSED] AUTH Response: {auth_resp}")
+                    
                     if auth_resp.get("status") != "AUTH_ACK":
                         logger.error(f"[WS] AUTH failed: {auth_resp}")
                         await asyncio.sleep(5)
                         continue
+                    
                     # SUBSCRIBE
                     sub_msg = {"type": "SUBSCRIBE", "strategy_id": self.strategy_id}
-                    await ws.send(json.dumps(sub_msg))
-                    sub_resp = json.loads(await ws.recv())
+                    sub_json = json.dumps(sub_msg)
+                    logger.info(f"[WS SEND] SUBSCRIBE: {sub_json}")
+                    await ws.send(sub_json)
+                    
+                    sub_raw = await ws.recv()
+                    logger.info(f"[WS RAW] SUBSCRIBE Response: {sub_raw}")
+                    sub_resp = json.loads(sub_raw)
+                    logger.info(f"[WS PARSED] SUBSCRIBE Response: {sub_resp}")
+                    
                     if sub_resp.get("status") != "SUBSCRIBED":
                         logger.error(f"[WS] SUBSCRIBE failed: {sub_resp}")
                         await asyncio.sleep(5)
                         continue
-                    logger.info("[WS] Subscribed to COM stream")
+                    logger.info("[WS] Successfully authenticated and subscribed to COM stream")
 
-                    # Listen loop
+                    # Listen loop with heartbeat monitoring
+                    last_message_time = time.time()
+                    heartbeat_interval = 30  # Send heartbeat every 30 seconds
+                    heartbeat_timeout = 60   # Consider dead if no message for 60 seconds
+                    
                     while True:
-                        raw = await ws.recv()
                         try:
-                            event = json.loads(raw)
-                        except Exception:
-                            logger.debug(f"[WS] Non-JSON message: {raw}")
-                            continue
-
-                        etype = event.get("type")
-                        if self.on_event:
+                            # Set a timeout for receiving messages
+                            raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                            last_message_time = time.time()
+                            
+                            # LOG EVERYTHING WE RECEIVE
+                            logger.info(f"[WS RAW] Received: {raw}")
+                            
                             try:
-                                await self.on_event(event)
-                            except Exception as cb_err:
-                                logger.error(f"[WS] on_event error: {cb_err}")
-                        else:
-                            logger.debug(f"[WS] Event: {event}")
+                                event = json.loads(raw)
+                                logger.info(f"[WS PARSED] Event: {event}")
+                            except Exception as parse_err:
+                                logger.warning(f"[WS PARSE ERROR] Failed to parse JSON: {parse_err}")
+                                logger.warning(f"[WS RAW DATA] {raw}")
+                                continue
+
+                            etype = event.get("type")
+                            logger.info(f"[WS TYPE] Event type: {etype}")
+                            
+                            # Handle pong responses
+                            if etype == "PONG":
+                                logger.info("[WS] Received PONG - connection healthy")
+                                self.last_heartbeat = time.time()
+                                continue
+                                
+                            if self.on_event:
+                                try:
+                                    logger.info(f"[WS CALLBACK] Calling on_event for {etype}")
+                                    await self.on_event(event)
+                                    logger.info(f"[WS CALLBACK] Successfully processed {etype}")
+                                except Exception as cb_err:
+                                    logger.error(f"[WS CALLBACK ERROR] on_event error for {etype}: {cb_err}")
+                            else:
+                                logger.info(f"[WS NO CALLBACK] Event {etype} - no callback handler")
+                                
+                        except asyncio.TimeoutError:
+                            # Check if we need to send heartbeat
+                            current_time = time.time()
+                            if current_time - last_message_time > heartbeat_interval:
+                                try:
+                                    # Send heartbeat ping
+                                    ping_msg = {"type": "PING", "timestamp": int(current_time)}
+                                    ping_json = json.dumps(ping_msg)
+                                    await ws.send(ping_json)
+                                    logger.info(f"[WS SEND] Heartbeat PING: {ping_json}")
+                                    last_message_time = current_time
+                                except Exception as ping_err:
+                                    logger.error(f"[WS] Failed to send heartbeat: {ping_err}")
+                                    break  # Connection is dead, reconnect
+                            
+                            # Check if connection is dead
+                            if current_time - last_message_time > heartbeat_timeout:
+                                logger.warning("[WS] No messages received for 60+ seconds - connection appears dead")
+                                break  # Reconnect
+                                
+                        except websockets.exceptions.ConnectionClosed:
+                            logger.warning("[WS] WebSocket connection closed by server")
+                            break  # Reconnect
             except Exception as e:
                 logger.error(f"[WS] Connection error: {e}")
+                logger.info("[WS] Reconnecting in 5 seconds...")
                 await asyncio.sleep(5)
 
 class ModelInference:
@@ -498,10 +568,11 @@ class ModelInference:
         self.binary_model = self.load_model(binary_model_path)
         self.directional_model = self.load_model(directional_model_path)
         
-        # Load scalers and feature info from binary model
+        # Load scalers and feature info from both models
         self.binary_robust_scaler = None
         self.binary_standard_scaler = None
-        self.directional_scaler = None
+        self.directional_robust_scaler = None
+        self.directional_standard_scaler = None
         self.feature_cols = None
         
         if self.binary_model:
@@ -523,6 +594,21 @@ class ModelInference:
                     logger.info(f"[DEBUG] Standard scaler type: {type(self.binary_standard_scaler)}")
             except Exception as e:
                 logger.error(f"[ERROR] Failed to load binary scalers: {e}")
+        
+        if self.directional_model:
+            try:
+                directional_checkpoint = torch.load(directional_model_path, map_location=self.device, weights_only=False)
+                self.directional_robust_scaler = directional_checkpoint.get('robust_scaler')
+                self.directional_standard_scaler = directional_checkpoint.get('standard_scaler')
+                self.directional_feature_cols = directional_checkpoint.get('feature_cols', [])
+                directional_args = directional_checkpoint.get('args')
+                self.directional_sequence_length_loaded = directional_args.sequence_length if directional_args else 120
+                logger.info(f"[AI] Directional model loaded with {len(self.directional_feature_cols)} features")
+                logger.info(f"[DEBUG] Directional sequence length: {self.directional_sequence_length_loaded}")
+                logger.info(f"[DEBUG] Directional robust scaler loaded: {self.directional_robust_scaler is not None}")
+                logger.info(f"[DEBUG] Directional standard scaler loaded: {self.directional_standard_scaler is not None}")
+            except Exception as e:
+                logger.error(f"[ERROR] Failed to load directional scalers: {e}")
         
         # Store for later use by feature engine
         self.binary_robust_scaler_loaded = self.binary_robust_scaler
@@ -1379,25 +1465,24 @@ class AdvancedFeatureEngine:
                 logger.info(f"[DEBUG] Using EXACT backtester preprocessing with prepare_features()")
                 logger.info(f"[DEBUG] Pre-prepare_features stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
                 
-                # Use prepare_features with fresh scaling on recent data (EXACTLY like backtester)
-                # Get recent data for scaler fitting (like backtester's 6-month approach)
-                recent_buffer_size = min(len(self.ohlcv_buffer), 1000)  # Use last 1000 candles or all available
-                recent_df = self.ohlcv_buffer.tail(recent_buffer_size).copy()
+                # Use SAVED scalers from checkpoint (not fresh scaling)
+                logger.info(f"[DEBUG] Using SAVED scalers from binary model checkpoint")
                 
-                # Calculate features on recent data for scaler fitting
-                recent_features_df = self.calculate_basic_features(recent_df)
-                recent_features_subset = recent_features_df[model_feature_cols].copy()
+                # Apply preprocessing (volume scaling, outlier clipping) exactly as in training
+                volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                                  'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
                 
-                # DEBUG: Check raw volume values before scaling
-                logger.info(f"[DEBUG] RAW volume values before scaling (last 10): {temp_df['volume'].tail(10).tolist()}")
-                logger.info(f"[DEBUG] RAW volume stats: min={temp_df['volume'].min():.6f}, max={temp_df['volume'].max():.6f}, mean={temp_df['volume'].mean():.6f}, std={temp_df['volume'].std():.6f}")
+                temp_df_processed = temp_df.copy()
+                for col in temp_df_processed.columns:
+                    if col in volume_features:
+                        temp_df_processed[col] = temp_df_processed[col] / 1e6
+                    elif temp_df_processed[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                        p1, p99 = np.percentile(temp_df_processed[col], [1, 99])
+                        temp_df_processed[col] = temp_df_processed[col].clip(p1, p99)
                 
-                # Fit scaler on recent data
-                logger.info(f"[DEBUG] Fitting scaler on {len(recent_features_subset)} recent candles")
-                _, fitted_scaler = prepare_features(recent_features_subset, model_feature_cols, scaler=None, fit_scaler=True)
-                
-                # Apply scaler to current features
-                features_final, _ = prepare_features(temp_df, model_feature_cols, scaler=fitted_scaler, fit_scaler=False)
+                # Apply the SAVED scalers (no fitting!)
+                features_robust_scaled = self.binary_robust_scaler.transform(temp_df_processed)
+                features_final = self.binary_standard_scaler.transform(features_robust_scaled)
                 
                 logger.info(f"[DEBUG] Applied prepare_features - stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
                 
@@ -1435,29 +1520,94 @@ class AdvancedFeatureEngine:
             return pd.Series(index=prices.index, dtype=float)
     
     def get_directional_features(self) -> Optional[np.ndarray]:
-        """Get advanced features for directional model (238 features)"""
-        if len(self.ohlcv_buffer) < 37:
+        """Get advanced features for directional model (238 features) - EXACTLY like backtester"""
+        if len(self.ohlcv_buffer) < 120:  # Need sequence length
             return None
             
         try:
-            # Use the first 37 close prices (same as binary) and pad to 238
-            recent_closes = self.ohlcv_buffer['close'].tail(37).values
+            # Use EXACT same feature columns as backtester
+            directional_feature_cols = [
+                'open', 'high_x', 'low_x', 'close_x', 'volume', 'quote_volume', 'r1', 'r2', 'r5', 'r10', 'range_pct', 'body_pct', 'rv', 'vol_z', 'avg_trade_size', 'buy_vol', 'sell_vol', 'mean_size', 'max_size', 'p95_size', 'n_trades', 'signed_vol', 'imb_aggr', 'CVD', 'signed_volatility', 'block_trades', 'impact_proxy', 'vw_tick_return', 'vol_regime', 'drawdown', 'minute_sin', 'minute_cos', 'day_sin', 'day_cos', 'session_asia', 'session_europe', 'session_us', 'price_position', 'vol_concentration', 'vol_entropy',
+                'buy_sell_ratio', 'buy_sell_diff', 'buy_sell_imbalance', 'buy_momentum_5', 'sell_momentum_5', 'imbalance_momentum_5', 'imbalance_volatility_5', 'buy_momentum_10', 'sell_momentum_10', 'imbalance_momentum_10', 'imbalance_volatility_10', 'buy_momentum_20', 'sell_momentum_20', 'imbalance_momentum_20', 'imbalance_volatility_20', 'cumulative_buy_pressure', 'cumulative_sell_pressure', 'cumulative_imbalance', 'buy_acceleration', 'sell_acceleration', 'imbalance_acceleration',
+                'hl_spread', 'hl_spread_norm', 'open_position', 'intrabar_momentum', 'intrabar_reversal', 'volume_price_trend', 'vpt', 'vpt_momentum', 'tick_direction', 'tick_momentum', 'tick_acceleration',
+                'rsi_7', 'rsi_momentum_7', 'rsi_divergence_7', 'rsi_14', 'rsi_momentum_14', 'rsi_divergence_14', 'rsi_21', 'rsi_momentum_21', 'rsi_divergence_21', 'rsi_50', 'rsi_momentum_50', 'rsi_divergence_50',
+                'macd_8_21', 'macd_signal_8_21', 'macd_histogram_8_21', 'macd_momentum_8_21', 'macd_acceleration_8_21', 'macd_12_26', 'macd_signal_12_26', 'macd_histogram_12_26', 'macd_momentum_12_26', 'macd_acceleration_12_26', 'macd_19_39', 'macd_signal_19_39', 'macd_histogram_19_39', 'macd_momentum_19_39', 'macd_acceleration_19_39',
+                'bb_upper_20', 'bb_lower_20', 'bb_position_20', 'bb_width_20', 'bb_squeeze_20', 'bb_momentum_20', 'bb_acceleration_20', 'bb_upper_50', 'bb_lower_50', 'bb_position_50', 'bb_width_50', 'bb_squeeze_50', 'bb_momentum_50', 'bb_acceleration_50',
+                'ema_7', 'ema_momentum_7', 'ema_acceleration_7', 'ema_14', 'ema_momentum_14', 'ema_acceleration_14', 'ema_21', 'ema_momentum_21', 'ema_acceleration_21', 'ema_50', 'ema_momentum_50', 'ema_acceleration_50',
+                'sma_7', 'sma_momentum_7', 'sma_acceleration_7', 'sma_14', 'sma_momentum_14', 'sma_acceleration_14', 'sma_21', 'sma_momentum_21', 'sma_acceleration_21', 'sma_50', 'sma_momentum_50', 'sma_acceleration_50',
+                'vwap', 'vwap_deviation', 'vwap_momentum', 'vwap_acceleration', 'vwap_position',
+                'atr_7', 'atr_14', 'atr_21', 'atr_50', 'atr_momentum_7', 'atr_momentum_14', 'atr_momentum_21', 'atr_momentum_50',
+                'adx_7', 'adx_14', 'adx_21', 'adx_50', 'adx_momentum_7', 'adx_momentum_14', 'adx_momentum_21', 'adx_momentum_50',
+                'stoch_k_7', 'stoch_d_7', 'stoch_momentum_7', 'stoch_acceleration_7', 'stoch_k_14', 'stoch_d_14', 'stoch_momentum_14', 'stoch_acceleration_14', 'stoch_k_21', 'stoch_d_21', 'stoch_momentum_21', 'stoch_acceleration_21',
+                'williams_r_7', 'williams_r_14', 'williams_r_21', 'williams_r_momentum_7', 'williams_r_momentum_14', 'williams_r_momentum_21',
+                'cci_7', 'cci_14', 'cci_21', 'cci_momentum_7', 'cci_momentum_14', 'cci_momentum_21',
+                'roc_7', 'roc_14', 'roc_21', 'roc_momentum_7', 'roc_momentum_14', 'roc_momentum_21',
+                'momentum_7', 'momentum_14', 'momentum_21', 'momentum_acceleration_7', 'momentum_acceleration_14', 'momentum_acceleration_21',
+                'obv', 'obv_momentum', 'obv_acceleration', 'obv_divergence',
+                'mfi_7', 'mfi_14', 'mfi_21', 'mfi_momentum_7', 'mfi_momentum_14', 'mfi_momentum_21',
+                'cmf_7', 'cmf_14', 'cmf_21', 'cmf_momentum_7', 'cmf_momentum_14', 'cmf_momentum_21',
+                'ease_of_movement', 'eom_momentum', 'eom_acceleration',
+                'price_volume_trend', 'pvt_momentum', 'pvt_acceleration',
+                'kaufman_efficiency', 'ke_momentum', 'ke_acceleration',
+                'fractal_dimension', 'fd_momentum', 'fd_acceleration',
+                'hurst_exponent', 'he_momentum', 'he_acceleration',
+                'detrended_price', 'dp_momentum', 'dp_acceleration',
+                'zigzag', 'zz_momentum', 'zz_acceleration',
+                'support_resistance', 'sr_strength', 'sr_momentum',
+                'volume_profile', 'vp_momentum', 'vp_acceleration',
+                'market_profile', 'mp_momentum', 'mp_acceleration',
+                'order_flow', 'of_momentum', 'of_acceleration',
+                'liquidity', 'liq_momentum', 'liq_acceleration',
+                'volatility_regime', 'vr_momentum', 'vr_acceleration',
+                'trend_strength', 'ts_momentum', 'ts_acceleration',
+                'market_structure', 'ms_momentum', 'ms_acceleration',
+                'y_actionable'
+            ]
             
-            # Simple normalization
-            if np.std(recent_closes) > 0:
-                features = (recent_closes - np.mean(recent_closes)) / np.std(recent_closes)
+            # Calculate features on recent data (same as binary but for directional)
+            recent_df = self.ohlcv_buffer.tail(120).copy()  # Need sequence length
+            recent_features_df = self.calculate_basic_features(recent_df)
+            
+            # Create directional feature matrix with exact columns
+            directional_features_df = pd.DataFrame()
+            missing_directional = 0
+            for col in directional_feature_cols:
+                if col in recent_features_df.columns:
+                    directional_features_df[col] = recent_features_df[col]
+                else:
+                    directional_features_df[col] = 0.0
+                    missing_directional += 1
+            
+            if missing_directional > 0:
+                logger.warning(f"[DIRECTIONAL] Added {missing_directional} missing directional features as zeros")
+            
+            # Apply preprocessing (volume scaling, outlier clipping) exactly as in training
+            volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                              'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
+            
+            directional_features_processed = directional_features_df.copy()
+            for col in directional_features_processed.columns:
+                if col in volume_features:
+                    directional_features_processed[col] = directional_features_processed[col] / 1e6
+                elif directional_features_processed[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                    p1, p99 = np.percentile(directional_features_processed[col], [1, 99])
+                    directional_features_processed[col] = directional_features_processed[col].clip(p1, p99)
+            
+            # Fill NaN values
+            directional_features_processed = directional_features_processed.fillna(method='ffill').fillna(0)
+            
+            # Apply the SAVED directional scalers (no fitting!)
+            features_robust_scaled = self.directional_robust_scaler.transform(directional_features_processed)
+            features_final = self.directional_standard_scaler.transform(features_robust_scaled)
+            
+            # Return the last sequence (120 timesteps)
+            if len(features_final) >= 120:
+                sequence = features_final[-120:]  # Last 120 timesteps
+                logger.info(f"[DIRECTIONAL] Features prepared: {len(sequence)} timesteps x {len(directional_feature_cols)} features")
+                return sequence.astype(np.float32)
             else:
-                features = recent_closes
-            
-            # Pad to exactly 238 features (as expected by directional model)
-            if len(features) < 238:
-                padding = np.zeros(238 - len(features))
-                features = np.concatenate([features, padding])
-            else:
-                features = features[:238]
-            
-            logger.info(f"[FEATURES] Directional features prepared: {len(features)} features")
-            return features.astype(np.float32)
+                logger.error(f"[DIRECTIONAL] Insufficient data: {len(features_final)} < 120")
+                return None
             
         except Exception as e:
             logger.error(f"[ERROR] Directional feature extraction failed: {e}")

@@ -961,12 +961,22 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
     
     if use_binance:
         print(f"🔴 Loading BINANCE LIVE data from CSV files...")
-        ohlcv_path = "Live/DOGE/binancedatadoge.csv"
-        trades_path = "Live/DOGE/binanceaggtradesdoge.csv"
+        # Check if we're running from Live/DOGE directory or root directory
+        if os.path.exists("binancedatadoge.csv"):
+            ohlcv_path = "binancedatadoge.csv"
+            trades_path = "binanceaggtradesdoge.csv"
+        else:
+            ohlcv_path = "Live/DOGE/binancedatadoge.csv"
+            trades_path = "Live/DOGE/binanceaggtradesdoge.csv"
     else:
         print(f"🔴 Loading MEXC LIVE data from CSV files...")
-        ohlcv_path = "Live/DOGE/datadoge.csv"
-        trades_path = "Live/DOGE/aggtradesdoge.csv"
+        # Check if we're running from Live/DOGE directory or root directory
+        if os.path.exists("datadoge.csv"):
+            ohlcv_path = "datadoge.csv"
+            trades_path = "aggtradesdoge.csv"
+        else:
+            ohlcv_path = "Live/DOGE/datadoge.csv"
+            trades_path = "Live/DOGE/aggtradesdoge.csv"
     
     # Load OHLCV data
     if not os.path.exists(ohlcv_path):
@@ -1519,7 +1529,7 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
             
             # Debug first few candles
             if candles_processed <= 5:
-                print(f"🔧 Debug candle {candles_processed} (idx={idx}): {candle_time} - {len(candle_trades)} trades, buy_vol={buy_vol:.6f}, sell_vol={sell_vol:.6f}, imb_aggr={imb_aggr:.6f}")
+                print(f"🔧 Debug candle {candles_processed} (idx={idx}): {candle_end} - {len(candle_trades)} trades, buy_vol={buy_vol:.6f}, sell_vol={sell_vol:.6f}, imb_aggr={imb_aggr:.6f}")
             
             # Block trades (large trades > 95th percentile)
             if p95_size > 0:

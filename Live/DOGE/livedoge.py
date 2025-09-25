@@ -631,7 +631,8 @@ class AdvancedFeatureEngine:
                 df['quantity'] = df['Quantity']
                 df['price'] = df['Price'] 
                 df['isbuyermaker'] = df['IsBuyerMaker']
-                self.trades_buffer = df.sort_values('datetime').tail(1000)
+                # Keep all loaded trades; we'll window by time during the run loop
+                self.trades_buffer = df.sort_values('datetime')
                 logger.info(f"[DEBUG] Loaded trades with columns: {list(self.trades_buffer.columns)}")
                 return True
         except Exception as e:
@@ -1655,17 +1656,28 @@ class LiveDOGETrader:
                         await asyncio.sleep(5)
                         continue
                     
-                    # Check if we have at least 60 candles with trade data
-                    candles_with_trades = []
-                    for candle_time in self.feature_engine.ohlcv_buffer['datetime']:
-                        candle_trades = self.feature_engine.trades_buffer[
-                            self.feature_engine.trades_buffer['datetime'].dt.floor('1min') == candle_time
-                        ]
-                        if len(candle_trades) > 0:
-                            candles_with_trades.append(candle_time)
+                    # Require 60 CONSECUTIVE candles ending at latest_candle_time that have trade data
+                    # Build per-minute trade counts
+                    trade_counts_by_min = (
+                        self.feature_engine.trades_buffer
+                        .groupby(self.feature_engine.trades_buffer['datetime'].dt.floor('1min'))
+                        .size()
+                    )
                     
-                    if len(candles_with_trades) < 60:
-                        logger.info(f"[DEBUG] Only {len(candles_with_trades)} candles with trade data available (need 60) - waiting")
+                    # Walk backward from latest candle counting consecutive minutes with >=1 trade
+                    ohlcv_times = list(self.feature_engine.ohlcv_buffer['datetime'])
+                    consecutive_with_trades = 0
+                    for t in reversed(ohlcv_times):
+                        if t in trade_counts_by_min.index and trade_counts_by_min.loc[t] > 0:
+                            consecutive_with_trades += 1
+                            if consecutive_with_trades >= 60:
+                                break
+                        else:
+                            # Break streak at the first candle without trades
+                            break
+                    
+                    if consecutive_with_trades < 60:
+                        logger.info(f"[DEBUG] Only {consecutive_with_trades} consecutive candles with trade data (need 60) - waiting")
                         await asyncio.sleep(5)
                         continue
                     

@@ -1007,8 +1007,9 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
     # CRITICAL FIX: Scale MEXC live data to match Binance training data scale
     # From overlapping time period analysis: Binance ~5.9M vs MEXC ~9.9K = 599.88x scaling factor
     # This scaling must happen BEFORE the /1e6 preprocessing step
-    # TESTING: Try smaller scaling factor first to debug scaler issue
-    df['volume'] = df['volume'] * 100  # Test with 100x instead of 599.88x
+    if not use_binance:
+        # Only scale MEXC data, Binance data is already in correct scale
+        df['volume'] = df['volume'] * 599.88
     
     # Add basic technical indicators
     df['r1'] = df['close'].pct_change()
@@ -1449,6 +1450,8 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
     print(f"🔧 Calculating trade features from {len(trades_df)} trades...")
     
     # Group trades by minute candles
+    # Binance OHLCV timestamps end at :59 seconds, so we need to match trades within that minute
+    # For example, candle ending at 17:07:59 should match trades from 17:07:00 to 17:07:59
     trades_df['candle_time'] = trades_df['timestamp'].dt.floor('1min')
     
     print(f"🔧 Debug: Trade time range: {trades_df['timestamp'].min()} to {trades_df['timestamp'].max()}")
@@ -1482,8 +1485,16 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
     candles_processed = 0
     
     for idx, candle in ohlcv_df.iterrows():
-        candle_time = candle['timestamp'].floor('1min')
-        candle_trades = trades_df[trades_df['candle_time'] == candle_time]
+        # For each candle ending at candle['timestamp'], find trades within that minute
+        # Binance OHLCV timestamps end at :59 seconds
+        candle_end = candle['timestamp']
+        candle_start = candle_end.replace(second=0, microsecond=0)
+        
+        # Match trades that fall within this candle's time window
+        candle_trades = trades_df[
+            (trades_df['timestamp'] >= candle_start) & 
+            (trades_df['timestamp'] <= candle_end)
+        ]
         
         if len(candle_trades) > 0:
             candles_processed += 1

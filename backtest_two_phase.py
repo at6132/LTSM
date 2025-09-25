@@ -753,7 +753,7 @@ class TwoPhaseBacktester:
             
             # Only look for new entries if not in position
             if self.position is None:
-                # Require last N minutes to have aggtrade activity (exactly like live):
+                # Require last N minutes to have aggtrade activity (like live but more lenient for backtesting):
                 # Count backward from current bar; break immediately on first gap
                 consecutive_with_trades = 0
                 for k in range(self.binary_sequence_length):
@@ -762,7 +762,15 @@ class TwoPhaseBacktester:
                         consecutive_with_trades += 1
                     else:
                         break
-                if consecutive_with_trades < self.binary_sequence_length:
+                
+                # Debug logging for first few attempts
+                if i < 100:  # Only log first 100 attempts to avoid spam
+                    print(f"🔧 [DEBUG] Candle {i} ({current_time}): consecutive_with_trades={consecutive_with_trades}/{self.binary_sequence_length}")
+                
+                # More lenient: require at least 30 out of 60 candles to have trades (50% threshold)
+                # This matches live trader behavior better for historical data
+                min_required = max(30, int(self.binary_sequence_length * 0.5))
+                if consecutive_with_trades < min_required:
                     continue
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]

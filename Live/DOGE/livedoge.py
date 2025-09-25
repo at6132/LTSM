@@ -582,6 +582,9 @@ class AdvancedFeatureEngine:
         self.sequence_length = sequence_length
         self.ohlcv_buffer = pd.DataFrame()
         self.trades_buffer = pd.DataFrame()
+        # Store the exact last scaled inputs that are sent to the binary model
+        self.last_binary_scaled_sequence = None  # type: Optional[np.ndarray]
+        self.last_binary_feature_cols = []
         
         # EXACT SAME 38 BINARY FEATURES AS BACKTESTER (37 base + y_actionable = 38)
         self.feature_columns = [
@@ -743,7 +746,9 @@ class AdvancedFeatureEngine:
                 # Add to debug list and export
                 self.debug_features_list.append(latest_features)
                 debug_df = pd.concat(self.debug_features_list, ignore_index=True)
-                csv_path = "Live/DOGE/live_trader_features_debug.csv"
+                base_dir = os.path.dirname(__file__)
+                os.makedirs(base_dir, exist_ok=True)
+                csv_path = os.path.join(base_dir, "live_trader_features_debug.csv")
                 debug_df.to_csv(csv_path, index=False)
                 logger.info(f"[CSV] Exported {len(debug_df)} rows with {len(debug_df.columns)} features to {csv_path}")
             except Exception as e:
@@ -1332,7 +1337,10 @@ class AdvancedFeatureEngine:
                 logger.info(f"[LIVE] ACTUAL MODEL INPUT - volume: mean={temp_scaled_df['volume'].mean():.6f}, std={temp_scaled_df['volume'].std():.6f}")
                 logger.info(f"[LIVE] ACTUAL MODEL INPUT - range_pct: mean={temp_scaled_df['range_pct'].mean():.6f}, std={temp_scaled_df['range_pct'].std():.6f}")
                 logger.info(f"[LIVE] ACTUAL MODEL INPUT - impact_proxy: mean={temp_scaled_df['impact_proxy'].mean():.6f}, std={temp_scaled_df['impact_proxy'].std():.6f}")
-                
+                # Persist the exact scaled sequence for export by the trader
+                self.last_binary_scaled_sequence = features_final.astype(np.float32)
+                self.last_binary_feature_cols = list(model_feature_cols)
+
                 return features_final  # Return the full sequence (60, 38)
             else:
                 logger.error("[ERROR] prepare_features not available - cannot match backtester preprocessing!")
@@ -1497,7 +1505,9 @@ class LiveDOGETrader:
                 # Export what we have so far
                 if hasattr(self.feature_engine, 'ohlcv_buffer') and len(self.feature_engine.ohlcv_buffer) > 0:
                     logger.info("[RETRO] Exporting raw OHLCV data as backup...")
-                    backup_path = "live_trader_raw_ohlcv_debug.csv"
+                    base_dir = os.path.dirname(__file__)
+                    os.makedirs(base_dir, exist_ok=True)
+                    backup_path = os.path.join(base_dir, "live_trader_raw_ohlcv_debug.csv")
                     self.feature_engine.ohlcv_buffer.to_csv(backup_path, index=True)
                     logger.info(f"[RETRO] Raw OHLCV exported to: {backup_path}")
                 return
@@ -1505,7 +1515,9 @@ class LiveDOGETrader:
             logger.info(f"[RETRO] Calculated features on {len(full_df)} historical candles")
             
             # ALWAYS export the full features first, regardless of prediction success
-            csv_path_full = "live_trader_features_FULL_debug.csv"
+            base_dir = os.path.dirname(__file__)
+            os.makedirs(base_dir, exist_ok=True)
+            csv_path_full = os.path.join(base_dir, "live_trader_features_FULL_debug.csv")
             full_df.to_csv(csv_path_full, index=True)
             logger.info(f"[RETRO] Full features exported to: {csv_path_full} ({len(full_df)} rows)")
             
@@ -1716,6 +1728,29 @@ class LiveDOGETrader:
                 logger.warning("[WARNING] No binary features available")
                 return
             
+            # Export exact binary inputs being sent to the model (flattened)
+            try:
+                base_dir = os.path.dirname(__file__)
+                os.makedirs(base_dir, exist_ok=True)
+                csv_path_bin = os.path.join(base_dir, "live_binary_inputs.csv")
+                seq = self.feature_engine.last_binary_scaled_sequence if hasattr(self.feature_engine, 'last_binary_scaled_sequence') else None
+                if seq is not None and len(seq) >= 60:
+                    row = {
+                        "candle_time": str(self.last_candle_time),
+                        "type": "binary_input",
+                    }
+                    # Flatten sequence as featureName_t-59 ... featureName_t
+                    cols = self.feature_engine.last_binary_feature_cols or []
+                    for t in range(-60, 0):
+                        for j, col in enumerate(cols):
+                            key = f"{col}_{t}"
+                            row[key] = float(seq[t][j])
+                    # Append row
+                    pd.DataFrame([row]).to_csv(csv_path_bin, mode='a', header=not os.path.exists(csv_path_bin), index=False)
+                    logger.info(f"[CSV] Wrote binary_input row to {csv_path_bin}")
+            except Exception as e:
+                logger.error(f"[CSV] Failed to write binary_input: {e}")
+
             will_move, move_confidence = self.model_inference.predict_move(binary_features)
             
             logger.info(f"[AI] Current Price: ${current_price:.6f}")
@@ -1734,6 +1769,19 @@ class LiveDOGETrader:
                 logger.error("[❌ DIRECTIONAL FAILED] No directional features available - BINARY MOVE WASTED!")
                 return
             
+            # Export exact directional inputs (single vector)
+            try:
+                base_dir = os.path.dirname(__file__)
+                os.makedirs(base_dir, exist_ok=True)
+                csv_path_dir = os.path.join(base_dir, "live_directional_inputs.csv")
+                row = {"candle_time": str(self.last_candle_time), "type": "directional_input"}
+                for i, val in enumerate(directional_features.tolist()):
+                    row[f"f{i}"] = float(val)
+                pd.DataFrame([row]).to_csv(csv_path_dir, mode='a', header=not os.path.exists(csv_path_dir), index=False)
+                logger.info(f"[CSV] Wrote directional_input row to {csv_path_dir}")
+            except Exception as e:
+                logger.error(f"[CSV] Failed to write directional_input: {e}")
+
             direction, direction_confidence = self.model_inference.predict_direction(directional_features)
             
             logger.info(f"[AI] Direction prediction: {direction} (confidence: {direction_confidence:.3f})")

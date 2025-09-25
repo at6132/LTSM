@@ -359,8 +359,8 @@ class COMClient:
                                 "type": "percentage",
                                 "value": 0.35  # 0.35% take profit
                             },
-                            "order": {
-                                "order_type": "MARKET",
+                            "exec": {
+                                "type": "MARKET",
                                 "time_in_force": "GTC"
                             }
                         },
@@ -375,8 +375,8 @@ class COMClient:
                                 "type": "percentage",
                                 "value": -2.0  # -2% stop loss
                             },
-                            "order": {
-                                "order_type": "MARKET",
+                            "exec": {
+                                "type": "MARKET",
                                 "time_in_force": "GTC"
                             }
                         }

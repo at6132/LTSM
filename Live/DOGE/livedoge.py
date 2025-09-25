@@ -1911,8 +1911,14 @@ class LiveDOGETrader:
                     logger.info(f"[DEBUG] Latest candle time: {latest_candle_time}, Last processed: {self.last_candle_time}")
                     
                     # Check if latest candle has trade data
+                    # Binance OHLCV timestamps end at :59 seconds, so we need to match trades within that minute
+                    # For example, candle ending at 17:07:59 should match trades from 17:07:00 to 17:07:59
+                    candle_start = latest_candle_time.replace(second=0, microsecond=0)
+                    candle_end = latest_candle_time
+                    
                     latest_candle_trades = self.feature_engine.trades_buffer[
-                        self.feature_engine.trades_buffer['datetime'].dt.floor('1min') == latest_candle_time
+                        (self.feature_engine.trades_buffer['datetime'] >= candle_start) & 
+                        (self.feature_engine.trades_buffer['datetime'] <= candle_end)
                     ]
                     
                     if len(latest_candle_trades) == 0:
@@ -1921,18 +1927,21 @@ class LiveDOGETrader:
                         continue
                     
                     # Require 60 CONSECUTIVE candles ending at latest_candle_time that have trade data
-                    # Build per-minute trade counts
-                    trade_counts_by_min = (
-                        self.feature_engine.trades_buffer
-                        .groupby(self.feature_engine.trades_buffer['datetime'].dt.floor('1min'))
-                        .size()
-                    )
-                    
                     # Walk backward from latest candle counting consecutive minutes with >=1 trade
                     ohlcv_times = list(self.feature_engine.ohlcv_buffer['datetime'])
                     consecutive_with_trades = 0
+                    
                     for t in reversed(ohlcv_times):
-                        if t in trade_counts_by_min.index and trade_counts_by_min.loc[t] > 0:
+                        # For each candle ending at time t, check if there are trades within that minute
+                        candle_start = t.replace(second=0, microsecond=0)
+                        candle_end = t
+                        
+                        trades_in_candle = self.feature_engine.trades_buffer[
+                            (self.feature_engine.trades_buffer['datetime'] >= candle_start) & 
+                            (self.feature_engine.trades_buffer['datetime'] <= candle_end)
+                        ]
+                        
+                        if len(trades_in_candle) > 0:
                             consecutive_with_trades += 1
                             if consecutive_with_trades >= 60:
                                 break

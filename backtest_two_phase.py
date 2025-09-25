@@ -300,6 +300,7 @@ class TwoPhaseBacktester:
         self.binary_sequence_length = binary_args.sequence_length
         
         print(f"✅ Phase 1 (Binary) model loaded: {len(self.binary_feature_cols)} features")
+        print(f"🔧 Binary sequence length from checkpoint: {self.binary_sequence_length}")
         
         # Load Phase 2 (Directional) model
         directional_checkpoint = torch.load(self.directional_model_path, map_location=self.device, weights_only=False)
@@ -409,7 +410,7 @@ class TwoPhaseBacktester:
         self.entry_price = price
         self.entry_time = timestamp
         
-        print(f"📈 ENTER {direction}: Price={price:.6f}, Size=${position_value:,.0f}, Fees=${entry_fees:.2f}, Confidence={confidence:.3f}")
+        print(f"📈 ENTER {direction}: Timestamp={timestamp}, Price={price:.6f}, Size=${position_value:,.0f}, Fees=${entry_fees:.2f}, Confidence={confidence:.3f}")
     
     def exit_position(self, price: float, timestamp: pd.Timestamp, reason: str = ""):
         """Exit current position"""
@@ -455,7 +456,7 @@ class TwoPhaseBacktester:
         
         self.trades.append(trade_record)
         
-        print(f"📉 EXIT {self.position}: Price={price:.6f}, P&L=${net_pnl:+.2f}, Duration={trade_duration:.1f}min, Reason={reason}")
+        print(f"📉 EXIT {self.position}: Timestamp={timestamp}, Price={price:.6f}, P&L=${net_pnl:+.2f}, Duration={trade_duration:.1f}min, Reason={reason}")
         
         # Update GUI if available
         if self.gui:
@@ -528,6 +529,9 @@ class TwoPhaseBacktester:
         
         print(f"📊 Using EXACT {len(binary_feature_cols)} binary features (no truncation)")
         
+        # 📊 CREATE DEBUG DATAFRAME FOR CSV EXPORT (before any processing)
+        self.debug_features_df = df.copy()  # Store full dataframe with all features for export
+        
         # Create binary feature matrix with exact columns
         binary_features_df = pd.DataFrame()
         missing_binary = 0
@@ -555,6 +559,15 @@ class TwoPhaseBacktester:
         # Apply prepare_features with fresh scaling
         train_features, fitted_scaler = prepare_features(df_train_recent, binary_feature_cols, scaler=None, fit_scaler=True)
         binary_features_scaled, _ = prepare_features(binary_features_df, binary_feature_cols, scaler=fitted_scaler, fit_scaler=False)
+        
+        # DEBUG: Log actual model input values for comparison with live trader
+        print(f"🔧 [BACKTESTER] ACTUAL MODEL INPUT features after prepare_features:")
+        temp_scaled_df = pd.DataFrame(binary_features_scaled, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   r1: mean={temp_scaled_df['r1'].mean():.6f}, std={temp_scaled_df['r1'].std():.6f}")
+        print(f"   r2: mean={temp_scaled_df['r2'].mean():.6f}, std={temp_scaled_df['r2'].std():.6f}")
+        print(f"   volume: mean={temp_scaled_df['volume'].mean():.6f}, std={temp_scaled_df['volume'].std():.6f}")
+        print(f"   range_pct: mean={temp_scaled_df['range_pct'].mean():.6f}, std={temp_scaled_df['range_pct'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_scaled_df['impact_proxy'].mean():.6f}, std={temp_scaled_df['impact_proxy'].std():.6f}")
         
         # DEBUG: Check impact_proxy distribution in backtester
         if 'impact_proxy' in binary_feature_cols:
@@ -890,6 +903,15 @@ def load_live_data() -> pd.DataFrame:
     # Calculate trade-based features
     df = calculate_trade_features_for_backtest(df, trades_df)
     
+    # Debug: Check imb_aggr immediately after trade processing
+    print(f"🔧 Debug: imb_aggr immediately after trade processing:")
+    print(f"   Count: {len(df)}, Non-zero: {(df['imb_aggr'] != 0).sum()}")
+    trade_data_mask = (df['buy_vol'] != 0) | (df['sell_vol'] != 0) | (df['signed_vol'] != 0)
+    print(f"   Trade data candles: {trade_data_mask.sum()}")
+    if trade_data_mask.sum() > 0:
+        sample_with_trades = df[trade_data_mask]['imb_aggr'].head()
+        print(f"   Sample values (candles with trades): {sample_with_trades.tolist()}")
+    
     # Add missing columns with defaults
     if 'y_actionable' not in df.columns:
         df['y_actionable'] = 0
@@ -961,11 +983,39 @@ def load_live_data() -> pd.DataFrame:
     # y_actionable = 0 (will be added later)
     df['y_actionable'] = 0
 
+    # Debug: Check imb_aggr before directional features
+    print(f"🔧 Debug: imb_aggr before directional features calculation:")
+    print(f"   Count: {len(df)}, Non-zero: {(df['imb_aggr'] != 0).sum()}")
+    trade_data_mask = (df['buy_vol'] != 0) | (df['sell_vol'] != 0) | (df['signed_vol'] != 0)
+    if trade_data_mask.sum() > 0:
+        sample_with_trades = df[trade_data_mask]['imb_aggr'].head()
+        print(f"   Sample values (candles with trades): {sample_with_trades.tolist()}")
+    
     # === NOW COMPUTE ALL 238 DIRECTIONAL FEATURES ===
     df = compute_all_directional_features(df)
     
+    # Debug: Check imb_aggr before NaN/inf replacement
+    print(f"🔧 Debug: imb_aggr before NaN/inf replacement:")
+    print(f"   Count: {len(df)}, Non-zero: {(df['imb_aggr'] != 0).sum()}")
+    trade_mask = (df['buy_vol'] != 0) | (df['sell_vol'] != 0)
+    if trade_mask.sum() > 0:
+        print(f"   Sample values (candles with trades): {df[trade_mask]['imb_aggr'].head().tolist()}")
+    else:
+        print(f"   Sample values (first 5): {df['imb_aggr'].head().tolist()}")
+    print(f"   NaN count: {df['imb_aggr'].isna().sum()}")
+    print(f"   Inf count: {np.isinf(df['imb_aggr']).sum()}")
+    
     # Fill NaNs and infinities
     df = df.replace([np.inf, -np.inf], 0).fillna(0)
+    
+    # Debug: Check imb_aggr after NaN/inf replacement
+    print(f"🔧 Debug: imb_aggr after NaN/inf replacement:")
+    print(f"   Count: {len(df)}, Non-zero: {(df['imb_aggr'] != 0).sum()}")
+    trade_mask = (df['buy_vol'] != 0) | (df['sell_vol'] != 0)
+    if trade_mask.sum() > 0:
+        print(f"   Sample values (candles with trades): {df[trade_mask]['imb_aggr'].head().tolist()}")
+    else:
+        print(f"   Sample values (first 5): {df['imb_aggr'].head().tolist()}")
 
     # Apply same preprocessing as live script
     volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
@@ -985,6 +1035,17 @@ def load_live_data() -> pd.DataFrame:
             p1, p99 = np.percentile(df[col].dropna(), [1, 99])
             df[col] = df[col].clip(p1, p99)
     
+    # FILTER TO ONLY CANDLES WITH TRADE DATA
+    print(f"🔧 Filtering to candles with trade data...")
+    print(f"   Before filtering: {len(df)} candles")
+    
+    # Keep only candles that have trade data (non-zero buy_vol or sell_vol or signed_vol)
+    has_trades = (df['buy_vol'] != 0) | (df['sell_vol'] != 0) | (df['signed_vol'] != 0)
+    df = df[has_trades].copy()
+    
+    print(f"   After filtering: {len(df)} candles with trade data")
+    print(f"   Filtered period: {df['ts'].min()} to {df['ts'].max()}")
+    
     print(f"✅ Live data processed: {len(df)} samples with {len(df.columns)} features")
     print(f"   Period: {df['ts'].min()} to {df['ts'].max()}")
     print(f"   Feature ranges after preprocessing:")
@@ -1000,6 +1061,12 @@ def compute_all_directional_features(df: pd.DataFrame) -> pd.DataFrame:
     
     print(f"🔧 Computing ALL 238 directional features...")
     
+    # Debug: Check imb_aggr at start of function
+    print(f"🔧 [DIRECTIONAL] imb_aggr at START: Non-zero: {(df['imb_aggr'] != 0).sum()}")
+    trade_mask = (df['buy_vol'] != 0) | (df['sell_vol'] != 0)
+    if trade_mask.sum() > 0:
+        print(f"   Sample values: {df[trade_mask]['imb_aggr'].head().tolist()}")
+    
     # === DIRECTIONAL MODEL SPECIFIC FEATURES ===
     # Directional model has high_x, low_x, close_x (vs high, low, close for binary)
     df['high_x'] = df['high']
@@ -1009,7 +1076,11 @@ def compute_all_directional_features(df: pd.DataFrame) -> pd.DataFrame:
     # Buy/sell ratios and imbalances
     df['buy_sell_ratio'] = df['buy_vol'] / (df['sell_vol'] + 1e-9)
     df['buy_sell_diff'] = df['buy_vol'] - df['sell_vol']
-    df['buy_sell_imbalance'] = (df['buy_vol'] - df['sell_vol']) / (df['buy_vol'] + df['sell_vol'] + 1e-9)
+    # Use same formula as imb_aggr to avoid floating-point differences
+    df['buy_sell_imbalance'] = df.apply(
+        lambda row: (row['buy_vol'] - row['sell_vol']) / (row['buy_vol'] + row['sell_vol']) 
+        if (row['buy_vol'] + row['sell_vol']) > 0 else 0.0, axis=1
+    )
     
     # Momentum features (5, 10, 20 periods)
     for period in [5, 10, 20]:
@@ -1241,6 +1312,12 @@ def compute_all_directional_features(df: pd.DataFrame) -> pd.DataFrame:
     
     print(f"✅ Computed ALL directional features")
     
+    # Debug: Check imb_aggr at END of function
+    print(f"🔧 [DIRECTIONAL] imb_aggr at END: Non-zero: {(df['imb_aggr'] != 0).sum()}")
+    trade_mask = (df['buy_vol'] != 0) | (df['sell_vol'] != 0)
+    if trade_mask.sum() > 0:
+        print(f"   Sample values: {df[trade_mask]['imb_aggr'].head().tolist()}")
+    
     return df
 
 
@@ -1258,27 +1335,36 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
     print(f"🔧 Debug: Sample trade candle times: {trades_df['candle_time'].head(3).tolist()}")
     print(f"🔧 Debug: Sample OHLCV times: {ohlcv_df['timestamp'].head(3).tolist()}")
     
-    # Initialize trade feature columns
+    # Initialize trade feature columns (EXCEPT cumulative ones like CVD)
     trade_features = {
         'buy_vol': 0.0, 'sell_vol': 0.0, 'tot_vol': 0.0,
         'mean_size': 0.0, 'max_size': 0.0, 'p95_size': 0.0, 'n_trades': 0,
         'signed_vol': 0.0, 'imb_aggr': 0.0, 'block_trades': 0.0,
-        'CVD': 0.0, 'dCVD': 0.0, 'signed_volatility': 0.0, 'impact_proxy': 0.0,
+        'signed_volatility': 0.0, 'impact_proxy': 0.0,
         'vw_tick_return': 0.0, 'rv': 0.0
     }
     
+    # Initialize non-cumulative features only
     for col in trade_features:
         ohlcv_df[col] = trade_features[col]
+    
+    # Initialize cumulative features properly (don't overwrite existing values)
+    if 'CVD' not in ohlcv_df.columns:
+        ohlcv_df['CVD'] = 0.0
+    if 'dCVD' not in ohlcv_df.columns:
+        ohlcv_df['dCVD'] = 0.0
     
     # Process each candle
     cvd_cumulative = 0.0
     prev_cvd = 0.0
+    candles_processed = 0
     
     for idx, candle in ohlcv_df.iterrows():
         candle_time = candle['timestamp'].floor('1min')
         candle_trades = trades_df[trades_df['candle_time'] == candle_time]
         
         if len(candle_trades) > 0:
+            candles_processed += 1
             # Calculate volumes
             buy_trades = candle_trades[candle_trades['isbuyermaker'] == False]  # Taker buy = aggressive buy
             sell_trades = candle_trades[candle_trades['isbuyermaker'] == True]   # Taker sell = aggressive sell
@@ -1297,6 +1383,10 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
             # Signed volume and imbalance
             signed_vol = buy_vol - sell_vol
             imb_aggr = (buy_vol - sell_vol) / (buy_vol + sell_vol) if (buy_vol + sell_vol) > 0 else 0.0
+            
+            # Debug first few candles
+            if candles_processed <= 5:
+                print(f"🔧 Debug candle {candles_processed} (idx={idx}): {candle_time} - {len(candle_trades)} trades, buy_vol={buy_vol:.6f}, sell_vol={sell_vol:.6f}, imb_aggr={imb_aggr:.6f}")
             
             # Block trades (large trades > 95th percentile)
             if p95_size > 0:
@@ -1346,7 +1436,272 @@ def calculate_trade_features_for_backtest(ohlcv_df: pd.DataFrame, trades_df: pd.
             ohlcv_df.loc[idx, 'vw_tick_return'] = vw_tick_return
             ohlcv_df.loc[idx, 'rv'] = rv
     
-    print(f"✅ Trade features calculated for {len(ohlcv_df)} candles")
+    print(f"✅ Trade features calculated for {len(ohlcv_df)} candles ({candles_processed} with actual trade data)")
+    return ohlcv_df
+
+
+def load_raw_data(symbol: str = "DOGEUSDT", interval: str = "1m") -> pd.DataFrame:
+    """Load raw OHLCV and aggtrades from data_parquet/ and compute features internally"""
+    import os
+    
+    print(f"🔴 Loading RAW data from parquet files...")
+    
+    # Load raw OHLCV data
+    ohlcv_path = f"data_parquet/klines_{symbol}_{interval}.parquet"
+    if not os.path.exists(ohlcv_path):
+        raise FileNotFoundError(f"Raw OHLCV data not found: {ohlcv_path}")
+    
+    ohlcv_df = pd.read_parquet(ohlcv_path)
+    print(f"✅ Loaded raw OHLCV data: {len(ohlcv_df)} candles")
+    
+    # Load raw aggregate trades data
+    trades_path = f"data_parquet/agg_{symbol}.parquet"
+    if not os.path.exists(trades_path):
+        raise FileNotFoundError(f"Raw trades data not found: {trades_path}")
+    
+    trades_df = pd.read_parquet(trades_path)
+    print(f"✅ Loaded raw trades data: {len(trades_df)} trades")
+    
+    # Convert timestamps to datetime and rename columns
+    # OHLCV uses 'open_time' 
+    ohlcv_df['ts'] = pd.to_datetime(ohlcv_df['open_time'])
+    
+    # Trades uses 'transact_time'
+    trades_df['timestamp'] = pd.to_datetime(trades_df['transact_time'])
+    
+    # Filter to 2025 data only
+    ohlcv_2025 = ohlcv_df[ohlcv_df['ts'].dt.year == 2025].copy()
+    trades_2025 = trades_df[trades_df['timestamp'].dt.year == 2025].copy()
+    
+    print(f"✅ Filtered to 2025: {len(ohlcv_2025)} candles, {len(trades_2025)} trades")
+    
+    # Process features from raw data (same as live data processing)
+    print(f"🔧 Processing features from raw parquet data...")
+    
+    # Create basic features first
+    df = ohlcv_2025.copy()
+    df['open'] = df['open'].astype(float)
+    df['high'] = df['high'].astype(float) 
+    df['low'] = df['low'].astype(float)
+    df['close'] = df['close'].astype(float)
+    df['volume'] = df['volume'].astype(float)
+    
+    # Add basic technical indicators
+    df['r1'] = df['close'].pct_change()
+    df['r5'] = df['close'].pct_change(5)
+    df['r15'] = df['close'].pct_change(15)
+    
+    # RSI calculation
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # Additional price features
+    df['hl_ratio'] = (df['high'] - df['low']) / df['close']
+    df['co_ratio'] = (df['close'] - df['open']) / df['open']
+    df['volume_ma'] = df['volume'].rolling(20).mean()
+    df['price_ma'] = df['close'].rolling(20).mean()
+    df['volatility'] = df['r1'].rolling(20).std()
+    
+    # Quote volume (approximate)
+    df['quote_volume'] = df['volume'] * df['close']
+    
+    # Calculate trade-based features using raw trades
+    df = calculate_trade_features_from_raw_parquet(df, trades_2025)
+    
+    # ==== HARDCODE ALL 38 BINARY FEATURES EXACTLY ====
+    print("🔧 Computing ALL 38 binary features exactly...")
+    
+    # Basic returns (already have r1)
+    df['r2'] = df['close'].pct_change(2)
+    df['r5'] = df['close'].pct_change(5)
+    df['r10'] = df['close'].pct_change(10)
+    
+    # Range and body relative to previous close
+    prev_close = df['close'].shift(1)
+    df['range_pct'] = (df['high'] - df['low']) / (prev_close + 1e-9)
+    df['body_pct'] = (df['close'] - df['open']).abs() / (prev_close + 1e-9)
+    
+    # Volume z-score
+    vol_ma = df['volume'].rolling(20, min_periods=5).mean()
+    vol_sd = df['volume'].rolling(20, min_periods=5).std()
+    df['vol_z'] = (df['volume'] - vol_ma) / (vol_sd + 1e-9)
+    
+    # Average trade size
+    df['avg_trade_size'] = (df['tot_vol'] / (df['n_trades'].replace(0, np.nan))).fillna(0.0)
+    
+    # Volatility regime: 0=low,1=med,2=high based on rolling sigma tertiles
+    roll_sigma = df['r1'].rolling(200, min_periods=50).std()
+    q1 = roll_sigma.quantile(0.33)
+    q2 = roll_sigma.quantile(0.66)
+    vol_regime = np.select([roll_sigma <= q1, roll_sigma <= q2], [0, 1], default=2)
+    df['vol_regime'] = vol_regime
+    
+    # Drawdown state
+    rolling_max = df['close'].cummax()
+    df['drawdown'] = (df['close'] - rolling_max) / (rolling_max + 1e-9)
+    
+    # Calendar encodings
+    minute_of_day = df['ts'].dt.hour * 60 + df['ts'].dt.minute
+    day_of_week = df['ts'].dt.dayofweek
+    df['minute_sin'] = np.sin(2 * np.pi * minute_of_day / (24 * 60))
+    df['minute_cos'] = np.cos(2 * np.pi * minute_of_day / (24 * 60))
+    df['day_sin'] = np.sin(2 * np.pi * day_of_week / 7)
+    df['day_cos'] = np.cos(2 * np.pi * day_of_week / 7)
+    
+    # Sessions
+    hour = df['ts'].dt.hour
+    df['session_asia'] = ((hour >= 0) & (hour < 8)).astype(int)
+    df['session_europe'] = ((hour >= 8) & (hour < 16)).astype(int)
+    df['session_us'] = ((hour >= 16) & (hour < 24)).astype(int)
+    
+    # Price position and volume features
+    df['price_position'] = (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-9)
+    df['vol_concentration'] = df['volume'] / (df['volume'].rolling(20, min_periods=5).mean() + 1e-9)
+    df['vol_entropy'] = -(df['vol_concentration']) * np.log(df['vol_concentration'] + 1e-12)
+    
+    # y_actionable = 0 (will be added later)
+    df['y_actionable'] = 0
+    
+    # Fill NaN values
+    df = df.fillna(method='ffill').fillna(0)
+    
+    # Compute ALL directional features
+    df = compute_all_directional_features(df)
+    
+    # Fill NaNs and infinities
+    df = df.replace([np.inf, -np.inf], 0).fillna(0)
+
+    # Apply same preprocessing as live script
+    volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                      'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD', 'signed_volatility']
+    
+    print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
+    for col in df.columns:
+        if col in volume_features:
+            df[col] = df[col] / 1e6
+            print(f"   Scaled {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+        elif col == 'impact_proxy':
+            # Set impact_proxy to 0 to match training data (as done in live script)
+            df[col] = 0.0
+            print(f"   Set {col} to 0 (matching training data)")
+        elif df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+            # Apply outlier clipping
+            p1, p99 = np.percentile(df[col].dropna(), [1, 99])
+            df[col] = df[col].clip(p1, p99)
+    
+    print(f"✅ Raw data processed: {len(df)} samples with {len(df.columns)} features")
+    print(f"   Period: {df['ts'].min()} to {df['ts'].max()}")
+    
+    return df
+
+
+def calculate_trade_features_from_raw_parquet(ohlcv_df: pd.DataFrame, trades_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate trade-based features from raw parquet trades data"""
+    
+    print(f"🔧 Calculating trade features from {len(trades_df)} raw trades...")
+    
+    # Group trades by minute candles
+    trades_df['candle_time'] = trades_df['timestamp'].dt.floor('1min')
+    
+    # Initialize trade feature columns (EXCEPT cumulative ones like CVD)
+    trade_features = {
+        'buy_vol': 0.0, 'sell_vol': 0.0, 'tot_vol': 0.0,
+        'mean_size': 0.0, 'max_size': 0.0, 'p95_size': 0.0, 'n_trades': 0,
+        'signed_vol': 0.0, 'imb_aggr': 0.0, 'block_trades': 0.0,
+        'signed_volatility': 0.0, 'impact_proxy': 0.0,
+        'vw_tick_return': 0.0, 'rv': 0.0
+    }
+    
+    # Initialize non-cumulative features only
+    for col in trade_features:
+        ohlcv_df[col] = trade_features[col]
+    
+    # Initialize cumulative features properly (don't overwrite existing values)
+    if 'CVD' not in ohlcv_df.columns:
+        ohlcv_df['CVD'] = 0.0
+    if 'dCVD' not in ohlcv_df.columns:
+        ohlcv_df['dCVD'] = 0.0
+    
+    # Process each candle
+    cvd_cumulative = 0.0
+    prev_cvd = 0.0
+    
+    for idx, candle in ohlcv_df.iterrows():
+        candle_time = candle['ts'].floor('1min')
+        candle_trades = trades_df[trades_df['candle_time'] == candle_time]
+        
+        if len(candle_trades) > 0:
+            # Calculate volumes (using 'is_buyer_maker' from raw parquet)
+            buy_trades = candle_trades[candle_trades['is_buyer_maker'] == False]  # Taker buy = aggressive buy
+            sell_trades = candle_trades[candle_trades['is_buyer_maker'] == True]   # Taker sell = aggressive sell
+            
+            buy_vol = buy_trades['quantity'].sum() if len(buy_trades) > 0 else 0.0
+            sell_vol = sell_trades['quantity'].sum() if len(sell_trades) > 0 else 0.0
+            tot_vol = candle_trades['quantity'].sum()
+            
+            # Size statistics
+            sizes = candle_trades['quantity']
+            mean_size = sizes.mean() if len(sizes) > 0 else 0.0
+            max_size = sizes.max() if len(sizes) > 0 else 0.0
+            p95_size = sizes.quantile(0.95) if len(sizes) > 0 else 0.0
+            n_trades = len(candle_trades)
+            
+            # Signed volume and imbalance
+            signed_vol = buy_vol - sell_vol
+            imb_aggr = (buy_vol - sell_vol) / (buy_vol + sell_vol) if (buy_vol + sell_vol) > 0 else 0.0
+            
+            # Block trades (large trades > 95th percentile)
+            if p95_size > 0:
+                block_trades = len(sizes[sizes >= p95_size])
+            else:
+                block_trades = 0
+            
+            # CVD (Cumulative Volume Delta)
+            cvd_cumulative += signed_vol
+            dCVD = cvd_cumulative - prev_cvd
+            prev_cvd = cvd_cumulative
+            
+            # Signed volatility (volatility weighted by order flow)
+            price_changes = candle_trades['price'].diff().abs()
+            if len(price_changes) > 1 and signed_vol != 0:
+                signed_volatility = price_changes.mean() * np.sign(signed_vol)
+            else:
+                signed_volatility = 0.0
+            
+            # Volume-weighted tick return
+            tick_returns = candle_trades['price'].pct_change().fillna(0.0)
+            qty = candle_trades['quantity'].fillna(0.0)
+            vw_tick_return = (tick_returns * qty).sum() / (qty.sum() + 1e-9)
+
+            # Realized volatility (intra-trade) within the bar
+            rv = (tick_returns ** 2).sum()
+
+            # Impact proxy
+            r1 = candle['close'] / candle['open'] - 1 if candle['open'] > 0 else 0
+            impact_proxy = abs(r1) / (tot_vol + 1e-9) if tot_vol > 0 else 0.0
+            
+            # Update dataframe
+            ohlcv_df.loc[idx, 'buy_vol'] = buy_vol
+            ohlcv_df.loc[idx, 'sell_vol'] = sell_vol
+            ohlcv_df.loc[idx, 'tot_vol'] = tot_vol
+            ohlcv_df.loc[idx, 'mean_size'] = mean_size
+            ohlcv_df.loc[idx, 'max_size'] = max_size
+            ohlcv_df.loc[idx, 'p95_size'] = p95_size
+            ohlcv_df.loc[idx, 'n_trades'] = n_trades
+            ohlcv_df.loc[idx, 'signed_vol'] = signed_vol
+            ohlcv_df.loc[idx, 'imb_aggr'] = imb_aggr
+            ohlcv_df.loc[idx, 'block_trades'] = block_trades
+            ohlcv_df.loc[idx, 'CVD'] = cvd_cumulative
+            ohlcv_df.loc[idx, 'dCVD'] = dCVD
+            ohlcv_df.loc[idx, 'signed_volatility'] = signed_volatility
+            ohlcv_df.loc[idx, 'impact_proxy'] = impact_proxy
+            ohlcv_df.loc[idx, 'vw_tick_return'] = vw_tick_return
+            ohlcv_df.loc[idx, 'rv'] = rv
+    
+    print(f"✅ Trade features calculated for {len(ohlcv_df)} candles from raw data")
     return ohlcv_df
 
 
@@ -1376,8 +1731,8 @@ def main():
     parser = argparse.ArgumentParser(description="Two-Phase Trading System Backtest")
     parser.add_argument("--symbol", default="DOGEUSDT")
     parser.add_argument("--interval", default="1m")
-    parser.add_argument("--binary_model", default="models/best_binary_DOGEUSDT_1m.pth")
-    parser.add_argument("--directional_model", default="models/best_phase2_directional_DOGEUSDT_1m.pth")
+    parser.add_argument("--binary_model", default="Live/DOGE/models/binary.pth")
+    parser.add_argument("--directional_model", default="Live/DOGE/models/directonal.pth")
     parser.add_argument("--capital", type=float, default=100000.0)
     parser.add_argument("--position_size", type=float, default=0.10)
     parser.add_argument("--leverage", type=float, default=25.0)
@@ -1389,6 +1744,7 @@ def main():
     parser.add_argument("--take_profit", type=float, default=0.035)
     parser.add_argument("--gui", action="store_true", help="Run with live GUI")
     parser.add_argument("--live", action="store_true", help="Use live data from Live/DOGE/ directory instead of parquet files")
+    parser.add_argument("--raw", action="store_true", help="Use raw OHLCV and aggtrades from data_parquet/ instead of precomputed features")
     
     args = parser.parse_args()
     
@@ -1398,11 +1754,18 @@ def main():
     print(f"   Position size: {args.position_size:.1%} per trade")
     print(f"   Leverage: {args.leverage}x")
     print(f"   Fees: {args.fee_rate:.2%} per side ({args.fee_rate*2:.2%} round trip)")
+    if args.raw:
+        print(f"   🔴 RAW MODE: Computing features from raw parquet data")
+    elif args.live:
+        print(f"   🔴 LIVE MODE: Using CSV data from Live/DOGE/")
     
     # Load data - either live CSV files or 2025 parquet data
     if args.live:
         print("🔴 LIVE MODE: Using CSV data from Live/DOGE/ directory")
         df_2025 = load_live_data()
+    elif args.raw:
+        print("🔴 RAW MODE: Using raw parquet data from data_parquet/ directory")
+        df_2025 = load_raw_data(args.symbol, args.interval)
     else:
         df_2025 = load_2025_data(args.symbol, args.interval)
     
@@ -1499,16 +1862,26 @@ def main():
     # Display results
     print(f"\\n🎯 BACKTEST RESULTS:")
     print(f"   Total Trades: {results['total_trades']}")
-    print(f"   Win Rate: {results['win_rate']:.1%} ({results['winning_trades']} wins, {results['losing_trades']} losses)")
-    print(f"   Long/Short: {results['long_trades']}/{results['short_trades']}")
-    print(f"   Total P&L: ${results['total_pnl']:+,.2f}")
-    print(f"   Total Return: {results['total_return']:+.1%}")
-    print(f"   Final Capital: ${results['final_capital']:,.2f}")
-    print(f"   Average Win: ${results['avg_win']:+.2f}")
-    print(f"   Average Loss: ${results['avg_loss']:+.2f}")
-    print(f"   Profit Factor: {results['profit_factor']:.2f}")
-    print(f"   Max Drawdown: {results['max_drawdown']:.1%}")
-    print(f"   Avg Duration: {results['avg_duration_minutes']:.1f} minutes")
+    if results['total_trades'] > 0:
+        print(f"   Win Rate: {results['win_rate']:.1%} ({results['winning_trades']} wins, {results['losing_trades']} losses)")
+    else:
+        print(f"   Win Rate: N/A (0 trades - insufficient data for sequence length requirements)")
+    print(f"   Long/Short: {results.get('long_trades', 0)}/{results.get('short_trades', 0)}")
+    print(f"   Total P&L: ${results.get('total_pnl', 0):+,.2f}")
+    print(f"   Total Return: {results.get('total_return', 0):+.1%}")
+    print(f"   Final Capital: ${results.get('final_capital', 100000):,.2f}")
+    if results['total_trades'] > 0:
+        print(f"   Average Win: ${results['avg_win']:+.2f}")
+        print(f"   Average Loss: ${results['avg_loss']:+.2f}")
+        print(f"   Profit Factor: {results['profit_factor']:.2f}")
+        print(f"   Max Drawdown: {results['max_drawdown']:.1%}")
+        print(f"   Avg Duration: {results['avg_duration_minutes']:.1f} minutes")
+    else:
+        print(f"   Average Win: N/A")
+        print(f"   Average Loss: N/A") 
+        print(f"   Profit Factor: N/A")
+        print(f"   Max Drawdown: N/A")
+        print(f"   Avg Duration: N/A")
     
     # Final GUI update
     if gui:
@@ -1537,9 +1910,12 @@ def main():
             print("\\n👋 Shutting down...")
     
     # Exit reason breakdown
-    print(f"\\n📊 Exit Reasons:")
-    for reason, count in results['exit_reasons'].items():
-        print(f"   {reason}: {count} ({count/results['total_trades']:.1%})")
+    if results['total_trades'] > 0 and 'exit_reasons' in results:
+        print(f"\\n📊 Exit Reasons:")
+        for reason, count in results['exit_reasons'].items():
+            print(f"   {reason}: {count} ({count/results['total_trades']:.1%})")
+    else:
+        print(f"\\n📊 Exit Reasons: N/A (no trades executed)")
     
     # Save results
     results_filename = f"backtest_results_{args.symbol}_{args.interval}_2025.json"
@@ -1575,6 +1951,14 @@ def main():
             print(f"   ⚠️  Directional Model: {backtester.missing_directional_features} features missing out of 238")
     else:
         print(f"   ❓ Directional Model: Feature count not tracked")
+    
+    # 📊 EXPORT BACKTESTER FEATURES TO CSV FOR COMPARISON
+    if hasattr(backtester, 'debug_features_df') and backtester.debug_features_df is not None:
+        csv_path = f"backtester_features_{args.symbol}_{args.interval}_debug.csv"
+        backtester.debug_features_df.to_csv(csv_path, index=True)
+        print(f"📊 Backtester features exported to: {csv_path}")
+    else:
+        print("⚠️  No debug features to export")
     
     return results
 

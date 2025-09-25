@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import traceback
 import json
 import hmac
 import hashlib
@@ -11,9 +12,18 @@ import torch
 import torch.nn as nn
 from datetime import datetime
 from typing import Dict, Optional, Tuple
-from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
 import sys
 import os
+
+# Import the exact same preprocessing function as backtester
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+try:
+    from train_baseline import prepare_features
+    PREPARE_FEATURES_AVAILABLE = True
+except ImportError:
+    PREPARE_FEATURES_AVAILABLE = False
+    print("Warning: Could not import prepare_features from train_baseline.py")
 
 # Configure logging to both console and file
 logging.basicConfig(
@@ -586,6 +596,9 @@ class AdvancedFeatureEngine:
         ]  # EXACTLY 38 features matching backtester
         logger.info(f"[FEATURES] Using EXACT {len(self.feature_columns)} binary features matching backtester")
         
+        # CSV DEBUG EXPORT
+        self.debug_features_list = []  # Store all feature calculations for CSV export
+        
     def update_data(self, ohlcv_file: str, trades_file: str):
         ohlcv_ok = self.update_ohlcv(ohlcv_file)
         trades_ok = self.update_trades(trades_file)
@@ -632,13 +645,14 @@ class AdvancedFeatureEngine:
             
         try:
             # ==== HARDCODE ALL 38 BINARY FEATURES EXACTLY ====
-            logger.info("🔧 Computing ALL 38 binary features exactly...")
+            logger.info("[FEATURES] Computing ALL 38 binary features exactly...")
             
             # Basic returns
             df['r1'] = df['close'].pct_change()
             df['r2'] = df['close'].pct_change(2)
             df['r5'] = df['close'].pct_change(5)
             df['r10'] = df['close'].pct_change(10)
+            df['r15'] = df['close'].pct_change(15)  # Missing feature
             
             # Range and body relative to previous close
             prev_close = df['close'].shift(1)
@@ -650,8 +664,21 @@ class AdvancedFeatureEngine:
             vol_sd = df['volume'].rolling(20, min_periods=5).std()
             df['vol_z'] = (df['volume'] - vol_ma) / (vol_sd + 1e-9)
             
-            # Average trade size
-            df['avg_trade_size'] = (df['tot_vol'] / (df['n_trades'].replace(0, np.nan))).fillna(0.0)
+            # Missing basic features to match backtester exactly
+            df['rsi'] = self.calculate_rsi(df['close'], window=14)  # Basic RSI
+            df['hl_ratio'] = df['high'] / (df['low'] + 1e-9)  # High to low ratio
+            df['co_ratio'] = df['close'] / (df['open'] + 1e-9)  # Close to open ratio  
+            df['price_ma'] = df['close'].rolling(20).mean()  # Price moving average
+            df['volume_ma'] = df['volume'].rolling(20).mean()  # Volume moving average
+            df['volatility'] = df['r1'].rolling(20).std()  # Basic volatility
+            df['timestamp'] = df['ts']  # Timestamp column (same as ts)
+            
+            # Initialize n_trades if not present (needed for avg_trade_size calculation)
+            if 'n_trades' not in df.columns:
+                df['n_trades'] = 1  # Default to 1 trade per candle for basic calculation
+            
+            # Average trade size (use volume since tot_vol not in 38 features)
+            df['avg_trade_size'] = (df['volume'] / (df['n_trades'].replace(0, np.nan))).fillna(0.0)
             
             # Volatility regime: 0=low,1=med,2=high based on rolling sigma tertiles
             roll_sigma = df['r1'].rolling(200, min_periods=50).std()
@@ -698,8 +725,28 @@ class AdvancedFeatureEngine:
             # y_actionable = 0 
             df['y_actionable'] = 0
             
+            # ==== COMPUTE TRADE FEATURES (needed for both binary and directional) ====
+            df = self._calculate_trade_features(df)
+            
             # ==== NOW COMPUTE ALL 238 DIRECTIONAL FEATURES ====
             df = self.compute_all_directional_features(df)
+            
+            # ==== EXPORT ALL 254 FEATURES TO CSV FOR COMPARISON ====
+            try:
+                # Get the latest row with all calculated features
+                latest_features = df.tail(1).copy()
+                latest_features['timestamp'] = pd.Timestamp.now()
+                latest_features['move_prediction'] = False  # Default values
+                latest_features['move_confidence'] = 0.000
+                
+                # Add to debug list and export
+                self.debug_features_list.append(latest_features)
+                debug_df = pd.concat(self.debug_features_list, ignore_index=True)
+                csv_path = "Live/DOGE/live_trader_features_debug.csv"
+                debug_df.to_csv(csv_path, index=False)
+                logger.info(f"[CSV] Exported {len(debug_df)} rows with {len(debug_df.columns)} features to {csv_path}")
+            except Exception as e:
+                logger.error(f"[CSV] Export failed: {e}")
             
             return df
         except Exception as e:
@@ -709,7 +756,7 @@ class AdvancedFeatureEngine:
     def compute_all_directional_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute ALL 238 directional features exactly as expected by the model"""
         
-        logger.info(f"🔧 Computing ALL 238 directional features...")
+        logger.info(f"[DIRECTIONAL] Computing ALL 238 directional features...")
         
         # === DIRECTIONAL MODEL SPECIFIC FEATURES ===
         # Directional model has high_x, low_x, close_x (vs high, low, close for binary)
@@ -720,7 +767,11 @@ class AdvancedFeatureEngine:
         # Buy/sell ratios and imbalances
         df['buy_sell_ratio'] = df['buy_vol'] / (df['sell_vol'] + 1e-9)
         df['buy_sell_diff'] = df['buy_vol'] - df['sell_vol']
-        df['buy_sell_imbalance'] = (df['buy_vol'] - df['sell_vol']) / (df['buy_vol'] + df['sell_vol'] + 1e-9)
+        # Use same formula as imb_aggr to avoid floating-point differences
+        df['buy_sell_imbalance'] = df.apply(
+            lambda row: (row['buy_vol'] - row['sell_vol']) / (row['buy_vol'] + row['sell_vol']) 
+            if (row['buy_vol'] + row['sell_vol']) > 0 else 0.0, axis=1
+        )
         
         # Momentum features (5, 10, 20 periods)
         for period in [5, 10, 20]:
@@ -950,7 +1001,7 @@ class AdvancedFeatureEngine:
         df['low_y'] = df['low']
         df['close_y'] = df['close']
         
-        logger.info(f"✅ Computed ALL directional features")
+        logger.info(f"[DIRECTIONAL] Computed ALL directional features")
         
         return df
     
@@ -1184,7 +1235,7 @@ class AdvancedFeatureEngine:
             # 5. Apply saved scalers
             
             # Step 2: Volume scaling
-            volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+            volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 
                               'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD', 'signed_volatility']  # Complete list
             
             # Apply EXACT same preprocessing as backtester/training
@@ -1228,52 +1279,63 @@ class AdvancedFeatureEngine:
                     logger.warning(f"[WARNING] Missing feature column: {col}")
                     feature_matrix[:, i] = 0.0  # Missing features as zeros
             
-            # STEP 3: Apply scalers to preprocessed features
-            if (hasattr(self, 'binary_robust_scaler') and self.binary_robust_scaler is not None and
-                hasattr(self, 'binary_standard_scaler') and self.binary_standard_scaler is not None):
-                # Create DataFrame for scaler application
+            # STEP 3: Apply EXACT SAME preprocessing as backtester using prepare_features()
+            if PREPARE_FEATURES_AVAILABLE:
+                # Create DataFrame with features for prepare_features()
                 temp_df = pd.DataFrame(feature_matrix, columns=model_feature_cols)
                 
-                logger.info(f"[DEBUG] Pre-scaler stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
+                # CRITICAL FIX: Apply manual volume scaling BEFORE prepare_features (like backtester does)
+                # This creates DOUBLE scaling (/1e6 here + /1e6 in prepare_features = /1e12 total)
+                volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                                  'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD']
+                logger.info(f"[DEBUG] temp_df columns: {list(temp_df.columns)}")
+                logger.info(f"[DEBUG] Checking volume features: {volume_features}")
+                for col in volume_features:
+                    if col in temp_df.columns:
+                        logger.info(f"[DEBUG] Found {col} - before scaling: mean={temp_df[col].mean():.6f}, std={temp_df[col].std():.6f}")
+                        temp_df[col] = temp_df[col] / 1e6
+                        logger.info(f"[DEBUG] Pre-scaled {col}: mean={temp_df[col].mean():.6f}, std={temp_df[col].std():.6f}")
+                    else:
+                        logger.info(f"[DEBUG] Missing volume feature: {col}")
                 
-                # DEBUG: Find ALL features with large values (potential scaling issues)
-                max_vals = temp_df.max()
-                large_features = max_vals[max_vals > 1000]
-                if len(large_features) > 0:
-                    logger.warning(f"[DEBUG] Features with values > 1000 (potential scaling issues):")
-                    for feat, val in large_features.items():
-                        logger.warning(f"[DEBUG]   '{feat}': max={val:.1f}")
-                else:
-                    logger.info(f"[DEBUG] No features with values > 1000 - preprocessing looks good!")
+                logger.info(f"[DEBUG] Using EXACT backtester preprocessing with prepare_features()")
+                logger.info(f"[DEBUG] Pre-prepare_features stats: min={temp_df.min().min():.6f}, max={temp_df.max().max():.6f}, mean={temp_df.mean().mean():.6f}")
                 
-                # DEBUG: Show impact_proxy distribution before scaling
-                if 'impact_proxy' in temp_df.columns:
-                    impact_vals = temp_df['impact_proxy']
-                    logger.warning(f"[DEBUG] impact_proxy before scaling: min={impact_vals.min():.6f}, max={impact_vals.max():.6f}, mean={impact_vals.mean():.6f}, median={impact_vals.median():.6f}")
+                # Use prepare_features with fresh scaling on recent data (EXACTLY like backtester)
+                # Get recent data for scaler fitting (like backtester's 6-month approach)
+                recent_buffer_size = min(len(self.ohlcv_buffer), 1000)  # Use last 1000 candles or all available
+                recent_df = self.ohlcv_buffer.tail(recent_buffer_size).copy()
                 
-                # Apply saved RobustScaler (on already preprocessed data)
-                features_robust_scaled = self.binary_robust_scaler.transform(temp_df[model_feature_cols])
-                logger.info(f"[DEBUG] Applied RobustScaler - stats: min={features_robust_scaled.min():.6f}, max={features_robust_scaled.max():.6f}, mean={features_robust_scaled.mean():.6f}")
+                # Calculate features on recent data for scaler fitting
+                recent_features_df = self.calculate_basic_features(recent_df)
+                recent_features_subset = recent_features_df[model_feature_cols].copy()
                 
-                # DEBUG: Find which feature has the large value after RobustScaler
-                max_idx = np.unravel_index(np.argmax(features_robust_scaled), features_robust_scaled.shape)
-                logger.warning(f"[DEBUG] Largest value after RobustScaler: feature '{model_feature_cols[max_idx[1]]}' at position {max_idx[1]} = {features_robust_scaled[max_idx]:.1f}")
+                # DEBUG: Check raw volume values before scaling
+                logger.info(f"[DEBUG] RAW volume values before scaling (last 10): {temp_df['volume'].tail(10).tolist()}")
+                logger.info(f"[DEBUG] RAW volume stats: min={temp_df['volume'].min():.6f}, max={temp_df['volume'].max():.6f}, mean={temp_df['volume'].mean():.6f}, std={temp_df['volume'].std():.6f}")
                 
-                # Apply saved StandardScaler
-                features_final = self.binary_standard_scaler.transform(features_robust_scaled)
-                logger.info(f"[DEBUG] Applied StandardScaler - stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
+                # Fit scaler on recent data
+                logger.info(f"[DEBUG] Fitting scaler on {len(recent_features_subset)} recent candles")
+                _, fitted_scaler = prepare_features(recent_features_subset, model_feature_cols, scaler=None, fit_scaler=True)
                 
-                # Add debug logging for key feature distributions (COMPARE WITH BACKTESTER)
-                logger.info(f"[LIVE] Feature stats - r1: mean={df['r1'].iloc[-60:].mean():.6f}, std={df['r1'].iloc[-60:].std():.6f}")
-                logger.info(f"[LIVE] Feature stats - r2: mean={df['r2'].iloc[-60:].mean():.6f}, std={df['r2'].iloc[-60:].std():.6f}")
-                logger.info(f"[LIVE] Feature stats - volume: mean={df['volume'].iloc[-60:].mean():.6f}, std={df['volume'].iloc[-60:].std():.6f}")
-                logger.info(f"[LIVE] Feature stats - range_pct: mean={df['range_pct'].iloc[-60:].mean():.6f}, std={df['range_pct'].iloc[-60:].std():.6f}")
-                logger.info(f"[LIVE] Feature stats - impact_proxy: mean={df['impact_proxy'].iloc[-60:].mean():.6f}, std={df['impact_proxy'].iloc[-60:].std():.6f}")
+                # Apply scaler to current features
+                features_final, _ = prepare_features(temp_df, model_feature_cols, scaler=fitted_scaler, fit_scaler=False)
+                
+                logger.info(f"[DEBUG] Applied prepare_features - stats: min={features_final.min():.6f}, max={features_final.max():.6f}, mean={features_final.mean():.6f}")
+                
+                # Add debug logging for ACTUAL SCALED feature distributions sent to model
+                # Convert back to DataFrame to get feature names for logging
+                temp_scaled_df = pd.DataFrame(features_final, columns=model_feature_cols)
+                logger.info(f"[LIVE] ACTUAL MODEL INPUT - r1: mean={temp_scaled_df['r1'].mean():.6f}, std={temp_scaled_df['r1'].std():.6f}")
+                logger.info(f"[LIVE] ACTUAL MODEL INPUT - r2: mean={temp_scaled_df['r2'].mean():.6f}, std={temp_scaled_df['r2'].std():.6f}")
+                logger.info(f"[LIVE] ACTUAL MODEL INPUT - volume: mean={temp_scaled_df['volume'].mean():.6f}, std={temp_scaled_df['volume'].std():.6f}")
+                logger.info(f"[LIVE] ACTUAL MODEL INPUT - range_pct: mean={temp_scaled_df['range_pct'].mean():.6f}, std={temp_scaled_df['range_pct'].std():.6f}")
+                logger.info(f"[LIVE] ACTUAL MODEL INPUT - impact_proxy: mean={temp_scaled_df['impact_proxy'].mean():.6f}, std={temp_scaled_df['impact_proxy'].std():.6f}")
                 
                 return features_final  # Return the full sequence (60, 38)
             else:
-                logger.warning("[WARNING] Binary scalers not available (need both RobustScaler and StandardScaler), using raw features")
-                return feature_matrix
+                logger.error("[ERROR] prepare_features not available - cannot match backtester preprocessing!")
+                return None
             
         except Exception as e:
             logger.error(f"[ERROR] Binary feature extraction failed: {e}")
@@ -1336,7 +1398,7 @@ class PositionManager:
                 return None
             
             # *** SUCCESSFUL TRADE EXECUTION ***
-            logger.info(f"[🚀 TRADE SUCCESS] LIVE {side} order placed successfully! Binary->Directional->Trade COMPLETE!")
+            logger.info(f"[TRADE SUCCESS] LIVE {side} order placed successfully! Binary->Directional->Trade COMPLETE!")
             
             position_ref = order_response.get("position_ref", f"live_pos_{int(time.time())}")
             
@@ -1399,7 +1461,7 @@ class LiveDOGETrader:
         self.feature_engine.binary_robust_scaler = getattr(self.model_inference, 'binary_robust_scaler_loaded', None)
         self.feature_engine.binary_standard_scaler = getattr(self.model_inference, 'binary_standard_scaler_loaded', None)
         self.feature_engine.feature_cols = getattr(self.model_inference, 'feature_cols_loaded', [])
-        self.feature_engine.binary_sequence_length = getattr(self.model_inference, 'binary_sequence_length_loaded', 120)
+        self.feature_engine.binary_sequence_length = getattr(self.model_inference, 'binary_sequence_length_loaded', 60)
         
         self.symbol = config["symbol"]
         self.max_positions = config.get("max_positions", 1)
@@ -1412,10 +1474,162 @@ class LiveDOGETrader:
         
         logger.info("[START] LiveDOGETrader initialized with LIVE TRADING")
     
+    async def calculate_retroactive_features(self):
+        """Calculate features on ALL historical data and export to CSV"""
+        try:
+            logger.info("[RETRO] Calculating features on ALL available historical data...")
+            
+            # Load all available data
+            data_updated = self.feature_engine.update_data(self.ohlcv_file, self.trades_file)
+            if not data_updated:
+                logger.error("[ERROR] Failed to load historical data for retroactive calculation")
+                return
+            
+            # Get full dataframe with all features calculated
+            try:
+                full_df = self.feature_engine.calculate_basic_features(self.feature_engine.ohlcv_buffer)
+                if full_df is None or len(full_df) == 0:
+                    logger.error("[ERROR] No historical data available for retroactive calculation")
+                    return
+            except Exception as e:
+                logger.error(f"[ERROR] Feature calculation failed in retroactive mode: {e}")
+                # Export what we have so far
+                if hasattr(self.feature_engine, 'ohlcv_buffer') and len(self.feature_engine.ohlcv_buffer) > 0:
+                    logger.info("[RETRO] Exporting raw OHLCV data as backup...")
+                    backup_path = "live_trader_raw_ohlcv_debug.csv"
+                    self.feature_engine.ohlcv_buffer.to_csv(backup_path, index=True)
+                    logger.info(f"[RETRO] Raw OHLCV exported to: {backup_path}")
+                return
+            
+            logger.info(f"[RETRO] Calculated features on {len(full_df)} historical candles")
+            
+            # ALWAYS export the full features first, regardless of prediction success
+            csv_path_full = "live_trader_features_FULL_debug.csv"
+            full_df.to_csv(csv_path_full, index=True)
+            logger.info(f"[RETRO] Full features exported to: {csv_path_full} ({len(full_df)} rows)")
+            
+            # Add model predictions for each row that has enough sequence data
+            sequence_length = 60  # Use the confirmed sequence length from checkpoint
+            predictions_data = []
+            successful_predictions = 0
+            failed_predictions = 0
+            
+            logger.info(f"[RETRO] Generating predictions for {len(full_df)-sequence_length} candles (sequence_length={sequence_length})...")
+            
+            for i in range(sequence_length, len(full_df)):
+                try:
+                    # Force feature engine to use this specific window
+                    window_df = full_df.iloc[i-sequence_length:i+1].copy()  # +1 to include current candle
+                    
+                    # Temporarily replace the buffer to calculate features for this window
+                    original_buffer = self.feature_engine.ohlcv_buffer.copy()
+                    self.feature_engine.ohlcv_buffer = window_df
+                    
+                    # Get model predictions for this window
+                    try:
+                        binary_features = self.feature_engine.get_binary_features()
+                        if binary_features is not None and len(binary_features) > 0:
+                            # Use the model inference to predict
+                            move_pred, move_conf = self.model_inference.predict_binary_move()
+                            successful_predictions += 1
+                            
+                            current_row = full_df.iloc[i]
+                            predictions_data.append({
+                                'timestamp': current_row.name if hasattr(current_row, 'name') else i,
+                                'datetime': current_row.get('datetime', ''),
+                                'price': current_row.get('close', 0),
+                                'move_prediction': move_pred,
+                                'move_confidence': move_conf,
+                                'r1': current_row.get('r1', 0),
+                                'r2': current_row.get('r2', 0),
+                                'volume': current_row.get('volume', 0),
+                                'range_pct': current_row.get('range_pct', 0),
+                                'impact_proxy': current_row.get('impact_proxy', 0),
+                                'open': current_row.get('open', 0),
+                                'high': current_row.get('high', 0),
+                                'low': current_row.get('low', 0),
+                            })
+                        else:
+                            failed_predictions += 1
+                            logger.warning(f"[WARNING] No binary features for row {i}")
+                            
+                    except Exception as pred_error:
+                        failed_predictions += 1
+                        logger.warning(f"[WARNING] Prediction failed for row {i}: {pred_error}")
+                        # Still add the row with basic data
+                        current_row = full_df.iloc[i]
+                        predictions_data.append({
+                            'timestamp': current_row.name if hasattr(current_row, 'name') else i,
+                            'datetime': current_row.get('datetime', ''),
+                            'price': current_row.get('close', 0),
+                            'move_prediction': False,
+                            'move_confidence': 0.0,
+                            'r1': current_row.get('r1', 0),
+                            'r2': current_row.get('r2', 0),
+                            'volume': current_row.get('volume', 0),
+                            'range_pct': current_row.get('range_pct', 0),
+                            'impact_proxy': current_row.get('impact_proxy', 0),
+                            'open': current_row.get('open', 0),
+                            'high': current_row.get('high', 0),
+                            'low': current_row.get('low', 0),
+                        })
+                        
+                    
+                    # Restore original buffer
+                    self.feature_engine.ohlcv_buffer = original_buffer
+                    
+                    # Progress logging
+                    if i % 25 == 0:
+                        logger.info(f"[RETRO] Processed {i-sequence_length+1}/{len(full_df)-sequence_length} predictions... (success: {successful_predictions}, failed: {failed_predictions})")
+                            
+                except Exception as e:
+                    logger.warning(f"[WARNING] Failed to calculate prediction for row {i}: {e}")
+                    continue
+            
+            # Export comprehensive CSV
+            if predictions_data:
+                import pandas as pd
+                predictions_df = pd.DataFrame(predictions_data)
+                
+                # Export files
+                csv_path_full = "live_trader_features_FULL_debug.csv"
+                csv_path_predictions = "live_trader_predictions_debug.csv"
+                
+                full_df.to_csv(csv_path_full, index=True)
+                predictions_df.to_csv(csv_path_predictions, index=False)
+                
+                logger.info(f"[RETRO] RETROACTIVE EXPORT COMPLETE:")
+                logger.info(f"   [FILE] Full features: {csv_path_full} ({len(full_df)} rows)")
+                logger.info(f"   [FILE] Predictions: {csv_path_predictions} ({len(predictions_df)} rows)")
+                
+                # Log summary stats
+                if len(predictions_df) > 0:
+                    move_count = predictions_df['move_prediction'].sum()
+                    logger.info(f"[RETRO] RETROACTIVE SUMMARY:")
+                    logger.info(f"   [STATS] Total predictions: {len(predictions_df)}")
+                    logger.info(f"   [STATS] Successful predictions: {successful_predictions}")
+                    logger.info(f"   [STATS] Failed predictions: {failed_predictions}")
+                    logger.info(f"   [STATS] Move predictions: {move_count} ({move_count/len(predictions_df)*100:.1f}%)")
+                    logger.info(f"   [STATS] Avg confidence: {predictions_df['move_confidence'].mean():.3f}")
+                    logger.info(f"   [STATS] Price range: ${predictions_df['price'].min():.6f} - ${predictions_df['price'].max():.6f}")
+                
+            else:
+                logger.warning("[WARNING] No predictions calculated in retroactive mode - but full features were still exported")
+                
+        except Exception as e:
+            logger.error(f"[ERROR] Retroactive calculation failed: {e}")
+            logger.error(f"[ERROR] Traceback: {traceback.format_exc()}")
+    
     async def run(self):
         self.running = True
         logger.info("[SIGNAL] Starting live LIVE trading...")
         
+        # RETROACTIVE CALCULATION: Process all historical data first
+        logger.info("[RETRO] RETROACTIVE MODE: Calculating features on ALL historical data...")
+        # Skip retroactive calculation - just start live trading
+        logger.info("[STARTUP] Skipping retroactive calculation - starting live trading directly")
+        
+        logger.info("[LIVE] Starting LIVE trading loop...")
         while self.running:
             try:
                 # Update data from CSV files
@@ -1429,11 +1643,15 @@ class LiveDOGETrader:
                 # Check for new candle
                 if len(self.feature_engine.ohlcv_buffer) > 0:
                     latest_candle_time = self.feature_engine.ohlcv_buffer['datetime'].iloc[-1]
+                    logger.info(f"[DEBUG] Latest candle time: {latest_candle_time}, Last processed: {self.last_candle_time}")
                     
                     # Process new candle
                     if self.last_candle_time is None or latest_candle_time > self.last_candle_time:
+                        logger.info(f"[DEBUG] NEW CANDLE DETECTED! Processing candle: {latest_candle_time}")
                         self.last_candle_time = latest_candle_time
                         await self.process_new_candle()
+                    else:
+                        logger.info(f"[DEBUG] No new candle - latest: {latest_candle_time}, last: {self.last_candle_time}")
                 
                 # COM handles all stops automatically via exit_plan - no internal monitoring needed
                 
@@ -1472,7 +1690,7 @@ class LiveDOGETrader:
                 return
             
             # *** BINARY MOVE DETECTED ***
-            logger.info(f"[🎯 BINARY MOVE DETECTED] Confidence: {move_confidence:.3f} - Proceeding to directional analysis")
+            logger.info(f"[BINARY MOVE DETECTED] Confidence: {move_confidence:.3f} - Proceeding to directional analysis")
             
             # Phase 2: Directional model with advanced features (232)
             directional_features = self.feature_engine.get_directional_features()

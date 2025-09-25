@@ -537,8 +537,8 @@ class COMWebSocketClient:
                             current_time = time.time()
                             if current_time - last_message_time > heartbeat_interval:
                                 try:
-                                    # Send heartbeat ping
-                                    ping_msg = {"type": "PING", "timestamp": int(current_time)}
+                                    # Send heartbeat ping (correct format for COM API)
+                                    ping_msg = {"type": "PING", "ts": int(current_time)}
                                     ping_json = json.dumps(ping_msg)
                                     await ws.send(ping_json)
                                     logger.info(f"[WS SEND] Heartbeat PING: {ping_json}")

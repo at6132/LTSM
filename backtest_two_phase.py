@@ -685,6 +685,10 @@ class TwoPhaseBacktester:
             current_price = current_row['close']
             current_time = current_row['ts']
             
+            # Skip if current candle has no trade data (same as live trader)
+            if (current_row['buy_vol'] == 0) and (current_row['sell_vol'] == 0):
+                continue
+            
             # Update GUI progress every 1000 bars
             if self.gui and i % 1000 == 0:
                 progress = ((i - start_bar) / (total_bars - start_bar)) * 100
@@ -767,9 +771,9 @@ class TwoPhaseBacktester:
                 if i < 100:  # Only log first 100 attempts to avoid spam
                     print(f"🔧 [DEBUG] Candle {i} ({current_time}): consecutive_with_trades={consecutive_with_trades}/{self.binary_sequence_length}")
                 
-                # More lenient: require at least 30 out of 60 candles to have trades (50% threshold)
-                # This matches live trader behavior better for historical data
-                min_required = max(30, int(self.binary_sequence_length * 0.5))
+                # Much more lenient: require at least 10 out of 60 candles to have trades (17% threshold)
+                # This matches live trader behavior better for historical data with sparse trade activity
+                min_required = max(10, int(self.binary_sequence_length * 0.17))
                 if consecutive_with_trades < min_required:
                     continue
                 # Phase 1: Check if move is detected using EXACT same method as labeling script

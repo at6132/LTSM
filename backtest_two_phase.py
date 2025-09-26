@@ -1020,6 +1020,9 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
     if not use_binance:
         # Only scale MEXC data, Binance data is already in correct scale
         df['volume'] = df['volume'] * 599.88
+    else:
+        # Binance data - NO scaling needed, already in correct units
+        pass
     
     # Add basic technical indicators
     df['r1'] = df['close'].pct_change()

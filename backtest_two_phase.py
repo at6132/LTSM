@@ -635,8 +635,21 @@ class TwoPhaseBacktester:
             min_scale = 1e-6  # Minimum scale threshold
             fixed_scaler.scale_[fixed_scaler.scale_ < min_scale] = min_scale
         
+        # DEBUG: Check data BEFORE scaling
+        print(f"🔧 [BACKTESTER] Data BEFORE scaling:")
+        temp_before_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
+        
         # Apply the FIXED scalers
         features_robust_scaled = fixed_scaler.transform(binary_features_processed)
+        
+        # DEBUG: Check data AFTER RobustScaler but BEFORE StandardScaler
+        print(f"🔧 [BACKTESTER] Data AFTER RobustScaler:")
+        temp_robust_df = pd.DataFrame(features_robust_scaled, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   volume: mean={temp_robust_df['volume'].mean():.6f}, std={temp_robust_df['volume'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_robust_df['impact_proxy'].mean():.6f}, std={temp_robust_df['impact_proxy'].std():.6f}")
+        
         binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
         
         # DEBUG: Log actual model input values for comparison with live trader

@@ -619,8 +619,11 @@ class TwoPhaseBacktester:
         binary_features_processed = binary_features_df.copy()
         for col in binary_features_processed.columns:
             if col in volume_features:
+                # CRITICAL FIX: Apply /1e6 scaling to volume features (as in training)
                 binary_features_processed[col] = binary_features_processed[col] / 1e6
             elif binary_features_processed[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                # CRITICAL FIX: Only apply outlier clipping to NON-volume features
+                # Volume features should NOT be clipped as this destroys variance for RobustScaler
                 p1, p99 = np.percentile(binary_features_processed[col], [1, 99])
                 binary_features_processed[col] = binary_features_processed[col].clip(p1, p99)
         

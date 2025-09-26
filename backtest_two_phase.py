@@ -619,16 +619,24 @@ class TwoPhaseBacktester:
         binary_features_processed = binary_features_df.copy()
         for col in binary_features_processed.columns:
             if col in volume_features:
-                # CRITICAL FIX: Apply /1e6 scaling to volume features (as in training)
                 binary_features_processed[col] = binary_features_processed[col] / 1e6
             elif binary_features_processed[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                # CRITICAL FIX: Only apply outlier clipping to NON-volume features
-                # Volume features should NOT be clipped as this destroys variance for RobustScaler
                 p1, p99 = np.percentile(binary_features_processed[col], [1, 99])
                 binary_features_processed[col] = binary_features_processed[col].clip(p1, p99)
         
-        # Apply the SAVED scalers (no fitting!)
-        features_robust_scaled = self.binary_robust_scaler.transform(binary_features_processed)
+        # CRITICAL FIX: Handle near-zero scale values in RobustScaler
+        # The RobustScaler was fitted on training data with some features having zero variance,
+        # causing scale values near zero (e.g., 4e-10). This collapses live data to constants.
+        
+        # Create a copy of the scaler and fix near-zero scales
+        fixed_scaler = self.binary_robust_scaler
+        if hasattr(fixed_scaler, 'scale_'):
+            # Replace scales that are too small with a reasonable default
+            min_scale = 1e-6  # Minimum scale threshold
+            fixed_scaler.scale_[fixed_scaler.scale_ < min_scale] = min_scale
+        
+        # Apply the FIXED scalers
+        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
         binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
         
         # DEBUG: Log actual model input values for comparison with live trader
@@ -729,8 +737,19 @@ class TwoPhaseBacktester:
         # Fill NaN values
         directional_features_ordered = directional_features_ordered.fillna(method='ffill').fillna(0)
         
-        # Apply exact scalers with matching feature names
-        directional_features_scaled = self.directional_robust_scaler.transform(directional_features_ordered)
+        # CRITICAL FIX: Handle near-zero scale values in RobustScaler
+        # The RobustScaler was fitted on training data with some features having zero variance,
+        # causing scale values near zero (e.g., 4e-10). This collapses live data to constants.
+        
+        # Create a copy of the scaler and fix near-zero scales
+        fixed_directional_scaler = self.directional_robust_scaler
+        if hasattr(fixed_directional_scaler, 'scale_'):
+            # Replace scales that are too small with a reasonable default
+            min_scale = 1e-6  # Minimum scale threshold
+            fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
+        
+        # Apply the FIXED scalers
+        directional_features_scaled = fixed_directional_scaler.transform(directional_features_ordered)
         directional_features_final = self.directional_standard_scaler.transform(directional_features_scaled)
         
         print(f"✅ Features prepared for both phases")

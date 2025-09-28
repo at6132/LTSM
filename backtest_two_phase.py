@@ -1062,9 +1062,9 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
         # MEXC data: scale to match RobustScaler expectations
         df['volume'] = df['volume'] * 599.88
     else:
-        # Binance data: scale to match RobustScaler expectations (center=2.35)
-        # Live Binance data has mean=3.93 after /1e6, need to scale by 0.598
-        df['volume'] = df['volume'] * 0.598
+        # EXPERIMENT: Skip scaling factor - use raw volume data
+        # df['volume'] = df['volume'] * 0.598
+        print(f"🔧 [EXPERIMENT] Using raw volume data without 0.598 scaling")
     
     # Add basic technical indicators
     df['r1'] = df['close'].pct_change()
@@ -1223,9 +1223,15 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
         if col in df.columns:
             print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
     
-    print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
+    print(f"🔧 [FIX] Volume features are already in millions - SKIPPING /1e6 scaling")
+    print(f"🔧 [FIX] Volume features after NO scaling:")
+    for col in ['volume', 'buy_vol', 'sell_vol', 'tot_vol']:
+        if col in df.columns:
+            print(f"   {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+    
+    # Only apply /1e6 to non-volume features that need it
     for col in df.columns:
-        if col in volume_features:
+        if col not in volume_features and col in ['quote_volume']:  # Only quote_volume might need scaling
             df[col] = df[col] / 1e6
             print(f"   Scaled {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
         elif col == 'impact_proxy':
@@ -1794,9 +1800,15 @@ def load_raw_data(symbol: str = "DOGEUSDT", interval: str = "1m") -> pd.DataFram
         if col in df.columns:
             print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
     
-    print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
+    print(f"🔧 [FIX] Volume features are already in millions - SKIPPING /1e6 scaling")
+    print(f"🔧 [FIX] Volume features after NO scaling:")
+    for col in ['volume', 'buy_vol', 'sell_vol', 'tot_vol']:
+        if col in df.columns:
+            print(f"   {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+    
+    # Only apply /1e6 to non-volume features that need it
     for col in df.columns:
-        if col in volume_features:
+        if col not in volume_features and col in ['quote_volume']:  # Only quote_volume might need scaling
             df[col] = df[col] / 1e6
             print(f"   Scaled {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
         elif col == 'impact_proxy':

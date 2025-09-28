@@ -649,16 +649,26 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # Apply the FIXED scalers (model expects scaled input)
-        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
+        # EXPERIMENT: Skip RobustScaler (it's collapsing volume features)
+        print(f"🔧 [EXPERIMENT] SKIPPING RobustScaler - Using StandardScaler only")
+        print(f"🔧 [EXPERIMENT] Raw features before StandardScaler:")
+        temp_raw_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   volume: mean={temp_raw_df['volume'].mean():.6f}, std={temp_raw_df['volume'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
         
-        # DEBUG: Check data AFTER RobustScaler but BEFORE StandardScaler
-        print(f"🔧 [BACKTESTER] Data AFTER RobustScaler:")
-        temp_robust_df = pd.DataFrame(features_robust_scaled, columns=binary_feature_cols, index=binary_features_df.index)
-        print(f"   volume: mean={temp_robust_df['volume'].mean():.6f}, std={temp_robust_df['volume'].std():.6f}")
-        print(f"   impact_proxy: mean={temp_robust_df['impact_proxy'].mean():.6f}, std={temp_robust_df['impact_proxy'].std():.6f}")
+        # Skip RobustScaler, go directly to StandardScaler
+        binary_features_scaled = self.binary_standard_scaler.transform(binary_features_processed)
         
-        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
+        # DEBUG: Check if binary_features_final has variation across candles
+        print(f"🔧 [DEBUG] binary_features_final shape: {binary_features_final.shape}")
+        if len(binary_features_final) > 60:
+            # Check volume variation across first 60 candles
+            volume_idx = binary_feature_cols.index('volume') if 'volume' in binary_feature_cols else -1
+            if volume_idx >= 0:
+                first_60_volumes = binary_features_final[:60, volume_idx]
+                print(f"🔧 [DEBUG] First 60 candles volume: min={first_60_volumes.min():.6f}, max={first_60_volumes.max():.6f}, std={first_60_volumes.std():.6f}")
+                print(f"🔧 [DEBUG] First 5 volumes: {first_60_volumes[:5]}")
+                print(f"🔧 [DEBUG] Last 5 volumes: {first_60_volumes[-5:]}")
         
         # DEBUG: Log actual model input values for comparison with live trader
         print(f"🔧 [BACKTESTER] ACTUAL MODEL INPUT features after prepare_features:")

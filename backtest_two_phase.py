@@ -648,15 +648,9 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # EXPERIMENT: Skip RobustScaler entirely - use StandardScaler only
-        print(f"🔧 [EXPERIMENT] SKIPPING RobustScaler - Using StandardScaler only")
-        print(f"🔧 [EXPERIMENT] Raw features before StandardScaler:")
-        temp_raw_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
-        print(f"   volume: mean={temp_raw_df['volume'].mean():.6f}, std={temp_raw_df['volume'].std():.6f}")
-        print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
-        
-        # Skip RobustScaler, go directly to StandardScaler
-        binary_features_scaled = self.binary_standard_scaler.transform(binary_features_processed)
+        # Apply the FIXED scalers (model expects scaled input)
+        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
+        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
         
         # DEBUG: Check if binary_features_scaled has variation across candles
         print(f"🔧 [DEBUG] binary_features_scaled shape: {binary_features_scaled.shape}")
@@ -777,11 +771,9 @@ class TwoPhaseBacktester:
             min_scale = 1e-6  # Minimum scale threshold
             fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
         
-        # EXPERIMENT: Skip RobustScaler entirely - use StandardScaler only
-        print(f"🔧 [EXPERIMENT] SKIPPING RobustScaler - Using StandardScaler only for directional")
-        
-        # Skip RobustScaler, go directly to StandardScaler
-        directional_features_final = self.directional_standard_scaler.transform(directional_features_ordered)
+        # Apply the FIXED scalers (model expects scaled input)
+        features_robust_scaled = fixed_directional_scaler.transform(directional_features_ordered)
+        directional_features_final = self.directional_standard_scaler.transform(features_robust_scaled)
         
         print(f"✅ Features prepared for both phases")
         
@@ -1291,11 +1283,10 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
         if col in df.columns:
             print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
     
-    print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
+    print(f"🔧 Applying preprocessing (SKIPPING volume scaling - already in correct units)...")
     for col in df.columns:
         if col in volume_features:
-            df[col] = df[col] / 1e6
-            print(f"   Scaled {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+            print(f"   {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f} (no scaling applied)")
         elif col == 'impact_proxy':
             # Set impact_proxy to 0 to match training data (as done in live script)
             df[col] = 0.0
@@ -1862,11 +1853,10 @@ def load_raw_data(symbol: str = "DOGEUSDT", interval: str = "1m") -> pd.DataFram
         if col in df.columns:
             print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
     
-    print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
+    print(f"🔧 Applying preprocessing (SKIPPING volume scaling - already in correct units)...")
     for col in df.columns:
         if col in volume_features:
-            df[col] = df[col] / 1e6
-            print(f"   Scaled {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+            print(f"   {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f} (no scaling applied)")
         elif col == 'impact_proxy':
             # Set impact_proxy to 0 to match training data (as done in live script)
             df[col] = 0.0
@@ -2021,7 +2011,7 @@ def main():
     parser.add_argument("--position_size", type=float, default=0.10)
     parser.add_argument("--leverage", type=float, default=25.0)
     parser.add_argument("--fee_rate", type=float, default=0.0003)
-    parser.add_argument("--move_threshold", type=float, default=0.7)
+    parser.add_argument("--move_threshold", type=float, default=0.3)
     parser.add_argument("--direction_threshold", type=float, default=0.55)
     parser.add_argument("--max_hold_minutes", type=int, default=30)
     parser.add_argument("--stop_loss", type=float, default=0.015)

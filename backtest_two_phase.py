@@ -624,6 +624,14 @@ class TwoPhaseBacktester:
                 p1, p99 = np.percentile(binary_features_processed[col], [1, 99])
                 binary_features_processed[col] = binary_features_processed[col].clip(p1, p99)
         
+        # DEBUG: Check volume feature statistics after preprocessing
+        print(f"🔧 [DEBUG] Volume features after /1e6 scaling:")
+        for col in ['volume', 'quote_volume', 'buy_vol', 'sell_vol']:
+            if col in binary_features_processed.columns:
+                mean_val = binary_features_processed[col].mean()
+                std_val = binary_features_processed[col].std()
+                print(f"   {col}: mean={mean_val:.6f}, std={std_val:.6f}")
+        
         # CRITICAL FIX: Handle near-zero scale values in RobustScaler
         # The RobustScaler was fitted on training data with some features having zero variance,
         # causing scale values near zero (e.g., 4e-10). This collapses live data to constants.

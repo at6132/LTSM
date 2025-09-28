@@ -891,29 +891,38 @@ class TwoPhaseBacktester:
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]
                 
-                # DEBUG: Check sequence shape and content
-                if i < 100:  # Only log first 100 attempts to avoid spam
-                    print(f"🔧 [DEBUG] Binary sequence shape: {binary_sequence.shape}")
-                    print(f"🔧 [DEBUG] Binary sequence range: [{i-self.binary_sequence_length+1}:{i+1}]")
-                    print(f"🔧 [DEBUG] Binary sequence sample (first candle): {binary_sequence[0][:5]}")  # First 5 features
-                    print(f"🔧 [DEBUG] Binary sequence sample (last candle): {binary_sequence[-1][:5]}")  # First 5 features
-                    
-                    # Check if volume features are identical across sequence
-                    volume_idx = self.binary_feature_cols.index('volume') if 'volume' in self.binary_feature_cols else -1
-                    if volume_idx >= 0:
-                        volume_values = binary_sequence[:, volume_idx]
-                        print(f"🔧 [DEBUG] Volume values across sequence: min={volume_values.min():.6f}, max={volume_values.max():.6f}, std={volume_values.std():.6f}")
-                        print(f"🔧 [DEBUG] Volume values first 5: {volume_values[:5]}")
-                        print(f"🔧 [DEBUG] Volume values last 5: {volume_values[-5:]}")
-                        
-                        # DEBUG: Check if we're extracting the same row multiple times
-                        print(f"🔧 [DEBUG] Checking if sequence extraction is correct:")
-                        print(f"🔧 [DEBUG] binary_features_final shape: {binary_features_final.shape}")
-                        print(f"🔧 [DEBUG] Sample from binary_features_final[{i-59}:{i+1}] volume values:")
-                        sample_volumes = binary_features_final[i-59:i+1, volume_idx]
-                        print(f"🔧 [DEBUG] Sample volumes: min={sample_volumes.min():.6f}, max={sample_volumes.max():.6f}, std={sample_volumes.std():.6f}")
-                        print(f"🔧 [DEBUG] Sample volumes first 5: {sample_volumes[:5]}")
-                        print(f"🔧 [DEBUG] Sample volumes last 5: {sample_volumes[-5:]}")
+        # DEBUG: Check sequence shape and content
+        if i < 100:  # Only log first 100 attempts to avoid spam
+            print(f"🔧 [DEBUG] Binary sequence shape: {binary_sequence.shape}")
+            print(f"🔧 [DEBUG] Binary sequence range: [{i-self.binary_sequence_length+1}:{i+1}]")
+            print(f"🔧 [DEBUG] Binary sequence sample (first candle): {binary_sequence[0][:5]}")  # First 5 features
+            print(f"🔧 [DEBUG] Binary sequence sample (last candle): {binary_sequence[-1][:5]}")  # First 5 features
+            
+            # Check if volume features are identical across sequence
+            volume_idx = self.binary_feature_cols.index('volume') if 'volume' in self.binary_feature_cols else -1
+            if volume_idx >= 0:
+                volume_values = binary_sequence[:, volume_idx]
+                print(f"🔧 [DEBUG] Volume values across sequence: min={volume_values.min():.6f}, max={volume_values.max():.6f}, std={volume_values.std():.6f}")
+                print(f"🔧 [DEBUG] Volume values first 5: {volume_values[:5]}")
+                print(f"🔧 [DEBUG] Volume values last 5: {volume_values[-5:]}")
+                
+                # DEBUG: Check if we're extracting the same row multiple times
+                print(f"🔧 [DEBUG] Checking if sequence extraction is correct:")
+                print(f"🔧 [DEBUG] binary_features_final shape: {binary_features_final.shape}")
+                print(f"🔧 [DEBUG] Sample from binary_features_final[{i-59}:{i+1}] volume values:")
+                sample_volumes = binary_features_final[i-59:i+1, volume_idx]
+                print(f"🔧 [DEBUG] Sample volumes: min={sample_volumes.min():.6f}, max={sample_volumes.max():.6f}, std={sample_volumes.std():.6f}")
+                print(f"🔧 [DEBUG] Sample volumes first 5: {sample_volumes[:5]}")
+                print(f"🔧 [DEBUG] Sample volumes last 5: {sample_volumes[-5:]}")
+                
+                # DEBUG: Check raw data before any processing
+                print(f"🔧 [DEBUG] Checking raw data before processing:")
+                raw_volume_idx = self.binary_feature_cols.index('volume') if 'volume' in self.binary_feature_cols else -1
+                if raw_volume_idx >= 0:
+                    raw_sample_volumes = binary_features_processed[i-59:i+1, raw_volume_idx]
+                    print(f"🔧 [DEBUG] Raw sample volumes: min={raw_sample_volumes.min():.6f}, max={raw_sample_volumes.max():.6f}, std={raw_sample_volumes.std():.6f}")
+                    print(f"🔧 [DEBUG] Raw sample volumes first 5: {raw_sample_volumes[:5]}")
+                    print(f"🔧 [DEBUG] Raw sample volumes last 5: {raw_sample_volumes[-5:]}")
 
                 # Export exact binary inputs (flattened) sent to model
                 try:

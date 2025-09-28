@@ -1212,10 +1212,10 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
     
     # CRITICAL FIX: Apply Binance scaling factor BEFORE /1e6 scaling
     if use_binance:
-        print(f"🔧 Applying Binance scaling factor (0.598) to volume features...")
+        print(f"🔧 Applying Binance scaling factor (1.67) to volume features...")
         for col in df.columns:
             if col in volume_features:
-                df[col] = df[col] * 0.598
+                df[col] = df[col] * 1.67
                 print(f"   Applied 0.598 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
     
     print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
@@ -1777,10 +1777,10 @@ def load_raw_data(symbol: str = "DOGEUSDT", interval: str = "1m") -> pd.DataFram
     
     # CRITICAL FIX: Apply Binance scaling factor BEFORE /1e6 scaling
     if use_binance:
-        print(f"🔧 Applying Binance scaling factor (0.598) to volume features...")
+        print(f"🔧 Applying Binance scaling factor (1.67) to volume features...")
         for col in df.columns:
             if col in volume_features:
-                df[col] = df[col] * 0.598
+                df[col] = df[col] * 1.67
                 print(f"   Applied 0.598 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
     
     print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")

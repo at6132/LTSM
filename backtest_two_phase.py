@@ -907,7 +907,7 @@ class TwoPhaseBacktester:
                         
                         print(f"🔧 [DEBUG] Binary logits: {move_logits.cpu().numpy()[0]}")
                         print(f"🔧 [DEBUG] Binary probs: {move_probs}")
-                        print(f"🔧 [DEBUG] Binary confidence: {move_confidence:.6f} (threshold: {self.move_threshold/100:.2f})")
+                        print(f"🔧 [DEBUG] Binary confidence: {move_confidence:.6f} (threshold: {move_threshold:.2f})")
                         print(f"🔧 [DEBUG] Binary prediction: {move_prediction}")
                         
                         if move_prediction == 1:

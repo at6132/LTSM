@@ -664,7 +664,9 @@ class TwoPhaseBacktester:
             # Check volume variation across first 60 candles
             volume_idx = binary_feature_cols.index('volume') if 'volume' in binary_feature_cols else -1
             if volume_idx >= 0:
-                first_60_volumes = binary_features_scaled[:60, volume_idx]
+                # Convert to numpy array for indexing
+                binary_features_array = binary_features_scaled.values if hasattr(binary_features_scaled, 'values') else binary_features_scaled
+                first_60_volumes = binary_features_array[:60, volume_idx]
                 print(f"🔧 [DEBUG] First 60 candles volume: min={first_60_volumes.min():.6f}, max={first_60_volumes.max():.6f}, std={first_60_volumes.std():.6f}")
                 print(f"🔧 [DEBUG] First 5 volumes: {first_60_volumes[:5]}")
                 print(f"🔧 [DEBUG] Last 5 volumes: {first_60_volumes[-5:]}")

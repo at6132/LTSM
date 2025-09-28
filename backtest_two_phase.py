@@ -1049,15 +1049,15 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
     df['close'] = df['close'].astype(float)
     df['volume'] = df['volume'].astype(float)
     
-    # CRITICAL FIX: Scale MEXC live data to match Binance training data scale
-    # From overlapping time period analysis: Binance ~5.9M vs MEXC ~9.9K = 599.88x scaling factor
-    # This scaling must happen BEFORE the /1e6 preprocessing step
+    # CRITICAL FIX: Scale live data to match RobustScaler expectations
+    # The RobustScaler was fitted on data with volume center=2.35, but live data has different scale
     if not use_binance:
-        # Only scale MEXC data, Binance data is already in correct scale
+        # MEXC data: scale to match RobustScaler expectations
         df['volume'] = df['volume'] * 599.88
     else:
-        # Binance data - NO scaling needed, already in correct units
-        pass
+        # Binance data: scale to match RobustScaler expectations (center=2.35)
+        # Live Binance data has mean=3.93 after /1e6, need to scale by 0.598
+        df['volume'] = df['volume'] * 0.598
     
     # Add basic technical indicators
     df['r1'] = df['close'].pct_change()

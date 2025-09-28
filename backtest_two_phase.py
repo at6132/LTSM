@@ -648,15 +648,15 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # EXPERIMENT: Skip RobustScaler (it's collapsing volume features)
-        print(f"🔧 [EXPERIMENT] SKIPPING RobustScaler - Using StandardScaler only")
-        print(f"🔧 [EXPERIMENT] Raw features before StandardScaler:")
+        # EXPERIMENT: Skip ALL scalers - use raw features directly
+        print(f"🔧 [EXPERIMENT] SKIPPING ALL SCALERS - Using raw features directly")
+        print(f"🔧 [EXPERIMENT] Raw features before model input:")
         temp_raw_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
         print(f"   volume: mean={temp_raw_df['volume'].mean():.6f}, std={temp_raw_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
         
-        # Skip RobustScaler, go directly to StandardScaler
-        binary_features_scaled = self.binary_standard_scaler.transform(binary_features_processed)
+        # Use raw features directly (no scaling at all)
+        binary_features_scaled = binary_features_processed
         
         # DEBUG: Check if binary_features_scaled has variation across candles
         print(f"🔧 [DEBUG] binary_features_scaled shape: {binary_features_scaled.shape}")
@@ -777,9 +777,9 @@ class TwoPhaseBacktester:
             min_scale = 1e-6  # Minimum scale threshold
             fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
         
-        # Apply the FIXED scalers (model expects scaled input)
-        directional_features_scaled = fixed_directional_scaler.transform(directional_features_ordered)
-        directional_features_final = self.directional_standard_scaler.transform(directional_features_scaled)
+        # EXPERIMENT: Skip ALL scalers - use raw features directly
+        print(f"🔧 [EXPERIMENT] SKIPPING ALL DIRECTIONAL SCALERS - Using raw features directly")
+        directional_features_final = directional_features_ordered
         
         print(f"✅ Features prepared for both phases")
         

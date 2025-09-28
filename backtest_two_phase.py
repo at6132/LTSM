@@ -648,27 +648,15 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # EXPERIMENT: Apply scalers but with aggressive fix for near-zero scales
-        print(f"🔧 [EXPERIMENT] Applying scalers with aggressive scale fixing")
+        # EXPERIMENT: Skip RobustScaler entirely - use StandardScaler only
+        print(f"🔧 [EXPERIMENT] SKIPPING RobustScaler - Using StandardScaler only")
+        print(f"🔧 [EXPERIMENT] Raw features before StandardScaler:")
+        temp_raw_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   volume: mean={temp_raw_df['volume'].mean():.6f}, std={temp_raw_df['volume'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
         
-        # Create a copy of the scaler and fix near-zero scales more aggressively
-        fixed_scaler = self.binary_robust_scaler
-        if hasattr(fixed_scaler, 'scale_'):
-            # Replace scales that are too small with a reasonable default
-            min_scale = 1e-3  # More aggressive threshold (was 1e-6)
-            fixed_scaler.scale_[fixed_scaler.scale_ < min_scale] = min_scale
-            print(f"🔧 [FIX] Fixed {np.sum(fixed_scaler.scale_ < 1e-6)} near-zero scales")
-        
-        # Apply the FIXED scalers
-        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
-        
-        # DEBUG: Check data AFTER RobustScaler but BEFORE StandardScaler
-        print(f"🔧 [BACKTESTER] Data AFTER RobustScaler:")
-        temp_robust_df = pd.DataFrame(features_robust_scaled, columns=binary_feature_cols, index=binary_features_df.index)
-        print(f"   volume: mean={temp_robust_df['volume'].mean():.6f}, std={temp_robust_df['volume'].std():.6f}")
-        print(f"   impact_proxy: mean={temp_robust_df['impact_proxy'].mean():.6f}, std={temp_robust_df['impact_proxy'].std():.6f}")
-        
-        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
+        # Skip RobustScaler, go directly to StandardScaler
+        binary_features_scaled = self.binary_standard_scaler.transform(binary_features_processed)
         
         # DEBUG: Check if binary_features_scaled has variation across candles
         print(f"🔧 [DEBUG] binary_features_scaled shape: {binary_features_scaled.shape}")
@@ -789,20 +777,11 @@ class TwoPhaseBacktester:
             min_scale = 1e-6  # Minimum scale threshold
             fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
         
-        # EXPERIMENT: Apply scalers but with aggressive fix for near-zero scales
-        print(f"🔧 [EXPERIMENT] Applying directional scalers with aggressive scale fixing")
+        # EXPERIMENT: Skip RobustScaler entirely - use StandardScaler only
+        print(f"🔧 [EXPERIMENT] SKIPPING RobustScaler - Using StandardScaler only for directional")
         
-        # Create a copy of the scaler and fix near-zero scales more aggressively
-        fixed_directional_scaler = self.directional_robust_scaler
-        if hasattr(fixed_directional_scaler, 'scale_'):
-            # Replace scales that are too small with a reasonable default
-            min_scale = 1e-3  # More aggressive threshold (was 1e-6)
-            fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
-            print(f"🔧 [FIX] Fixed {np.sum(fixed_directional_scaler.scale_ < 1e-6)} near-zero scales")
-        
-        # Apply the FIXED scalers
-        directional_features_scaled = fixed_directional_scaler.transform(directional_features_ordered)
-        directional_features_final = self.directional_standard_scaler.transform(directional_features_scaled)
+        # Skip RobustScaler, go directly to StandardScaler
+        directional_features_final = self.directional_standard_scaler.transform(directional_features_ordered)
         
         print(f"✅ Features prepared for both phases")
         

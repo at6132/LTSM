@@ -649,15 +649,16 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # EXPERIMENT: Skip scalers entirely and use raw features
-        print(f"🔧 [EXPERIMENT] SKIPPING SCALERS - Using raw features directly")
-        print(f"🔧 [EXPERIMENT] Raw features before model input:")
-        temp_raw_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
-        print(f"   volume: mean={temp_raw_df['volume'].mean():.6f}, std={temp_raw_df['volume'].std():.6f}")
-        print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
+        # Apply the FIXED scalers (model expects scaled input)
+        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
         
-        # Use raw features directly (no scaling)
-        binary_features_scaled = binary_features_processed.values  # Convert to numpy array
+        # DEBUG: Check data AFTER RobustScaler but BEFORE StandardScaler
+        print(f"🔧 [BACKTESTER] Data AFTER RobustScaler:")
+        temp_robust_df = pd.DataFrame(features_robust_scaled, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   volume: mean={temp_robust_df['volume'].mean():.6f}, std={temp_robust_df['volume'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_robust_df['impact_proxy'].mean():.6f}, std={temp_robust_df['impact_proxy'].std():.6f}")
+        
+        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
         
         # DEBUG: Log actual model input values for comparison with live trader
         print(f"🔧 [BACKTESTER] ACTUAL MODEL INPUT features after prepare_features:")
@@ -768,9 +769,9 @@ class TwoPhaseBacktester:
             min_scale = 1e-6  # Minimum scale threshold
             fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
         
-        # EXPERIMENT: Skip scalers entirely and use raw features
-        print(f"🔧 [EXPERIMENT] SKIPPING DIRECTIONAL SCALERS - Using raw features directly")
-        directional_features_final = directional_features_ordered.values  # Convert to numpy array
+        # Apply the FIXED scalers (model expects scaled input)
+        directional_features_scaled = fixed_directional_scaler.transform(directional_features_ordered)
+        directional_features_final = self.directional_standard_scaler.transform(directional_features_scaled)
         
         print(f"✅ Features prepared for both phases")
         
@@ -879,6 +880,13 @@ class TwoPhaseBacktester:
                     continue
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]
+                
+                # DEBUG: Check sequence shape and content
+                if i < 100:  # Only log first 100 attempts to avoid spam
+                    print(f"🔧 [DEBUG] Binary sequence shape: {binary_sequence.shape}")
+                    print(f"🔧 [DEBUG] Binary sequence range: [{i-self.binary_sequence_length+1}:{i+1}]")
+                    print(f"🔧 [DEBUG] Binary sequence sample (first candle): {binary_sequence[0][:5]}")  # First 5 features
+                    print(f"🔧 [DEBUG] Binary sequence sample (last candle): {binary_sequence[-1][:5]}")  # First 5 features
 
                 # Export exact binary inputs (flattened) sent to model
                 try:
@@ -1223,15 +1231,9 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
         if col in df.columns:
             print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
     
-    print(f"🔧 [FIX] Volume features are already in millions - SKIPPING /1e6 scaling")
-    print(f"🔧 [FIX] Volume features after NO scaling:")
-    for col in ['volume', 'buy_vol', 'sell_vol', 'tot_vol']:
-        if col in df.columns:
-            print(f"   {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
-    
-    # Only apply /1e6 to non-volume features that need it
+    print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
     for col in df.columns:
-        if col not in volume_features and col in ['quote_volume']:  # Only quote_volume might need scaling
+        if col in volume_features:
             df[col] = df[col] / 1e6
             print(f"   Scaled {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
         elif col == 'impact_proxy':
@@ -1800,15 +1802,9 @@ def load_raw_data(symbol: str = "DOGEUSDT", interval: str = "1m") -> pd.DataFram
         if col in df.columns:
             print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
     
-    print(f"🔧 [FIX] Volume features are already in millions - SKIPPING /1e6 scaling")
-    print(f"🔧 [FIX] Volume features after NO scaling:")
-    for col in ['volume', 'buy_vol', 'sell_vol', 'tot_vol']:
-        if col in df.columns:
-            print(f"   {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
-    
-    # Only apply /1e6 to non-volume features that need it
+    print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
     for col in df.columns:
-        if col not in volume_features and col in ['quote_volume']:  # Only quote_volume might need scaling
+        if col in volume_features:
             df[col] = df[col] / 1e6
             print(f"   Scaled {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
         elif col == 'impact_proxy':

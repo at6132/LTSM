@@ -887,6 +887,14 @@ class TwoPhaseBacktester:
                     print(f"🔧 [DEBUG] Binary sequence range: [{i-self.binary_sequence_length+1}:{i+1}]")
                     print(f"🔧 [DEBUG] Binary sequence sample (first candle): {binary_sequence[0][:5]}")  # First 5 features
                     print(f"🔧 [DEBUG] Binary sequence sample (last candle): {binary_sequence[-1][:5]}")  # First 5 features
+                    
+                    # Check if volume features are identical across sequence
+                    volume_idx = self.binary_feature_cols.index('volume') if 'volume' in self.binary_feature_cols else -1
+                    if volume_idx >= 0:
+                        volume_values = binary_sequence[:, volume_idx]
+                        print(f"🔧 [DEBUG] Volume values across sequence: min={volume_values.min():.6f}, max={volume_values.max():.6f}, std={volume_values.std():.6f}")
+                        print(f"🔧 [DEBUG] Volume values first 5: {volume_values[:5]}")
+                        print(f"🔧 [DEBUG] Volume values last 5: {volume_values[-5:]}")
 
                 # Export exact binary inputs (flattened) sent to model
                 try:

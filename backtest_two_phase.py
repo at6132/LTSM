@@ -891,6 +891,19 @@ class TwoPhaseBacktester:
                 # Phase 1: Check if move is detected using EXACT same method as labeling script
                 binary_sequence = binary_features_final[i-self.binary_sequence_length+1:i+1]
                 
+                # DEBUG: Check what the model is predicting
+                if i < 100:  # Only log first 100 attempts to avoid spam
+                    with torch.no_grad():
+                        binary_input = torch.FloatTensor(binary_sequence).unsqueeze(0).to(self.device)
+                        binary_pred = self.binary_model(binary_input)
+                        binary_prob = torch.sigmoid(binary_pred).cpu().numpy()[0]
+                        print(f"🔧 [DEBUG] Binary prediction: {binary_prob:.6f} (threshold: {self.move_threshold/100:.2f})")
+                        
+                        if binary_prob >= self.move_threshold/100:
+                            print(f"🔧 [DEBUG] ✅ MOVE DETECTED! Probability: {binary_prob:.6f}")
+                        else:
+                            print(f"🔧 [DEBUG] ❌ NO MOVE - Probability too low: {binary_prob:.6f}")
+                
         # DEBUG: Check sequence shape and content
         if i < 100:  # Only log first 100 attempts to avoid spam
             print(f"🔧 [DEBUG] Binary sequence shape: {binary_sequence.shape}")

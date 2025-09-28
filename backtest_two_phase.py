@@ -553,7 +553,8 @@ class TwoPhaseBacktester:
                     direction_threshold: float = 0.55,
                     max_hold_minutes: int = 30,
                     stop_loss_pct: float = 0.015,
-                    take_profit_pct: float = 0.0035) -> Dict:
+                    take_profit_pct: float = 0.0035,
+                    scaler_data_dir: str = None) -> Dict:
         """
         Run the two-phase backtest on the provided data.
         
@@ -614,9 +615,9 @@ class TwoPhaseBacktester:
         print(f"🔧 Fitting FRESH scalers on scaler data")
         
         # Use scaler data directory if provided, otherwise use recent data
-        if args.scaler_data_dir:
-            scaler_data_path = Path(args.scaler_data_dir)
-            clean_symbol = args.symbol.replace('USDT', '').replace('usdt', '').lower()
+        if scaler_data_dir:
+            scaler_data_path = Path(scaler_data_dir)
+            clean_symbol = "doge"  # Default for DOGEUSDT
             scaler_klines_file = scaler_data_path / f"scaler_data_{clean_symbol}_klines.csv"
             scaler_agg_file = scaler_data_path / f"scaler_data_{clean_symbol}_aggTrades.csv"
             
@@ -2192,7 +2193,8 @@ def main():
         direction_threshold=args.direction_threshold,
         max_hold_minutes=args.max_hold_minutes,
         stop_loss_pct=args.stop_loss,
-        take_profit_pct=args.take_profit
+        take_profit_pct=args.take_profit,
+        scaler_data_dir=args.scaler_data_dir
     )
     
     # Display results

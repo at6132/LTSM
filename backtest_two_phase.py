@@ -895,14 +895,25 @@ class TwoPhaseBacktester:
                 if i < 100:  # Only log first 100 attempts to avoid spam
                     with torch.no_grad():
                         binary_input = torch.FloatTensor(binary_sequence).unsqueeze(0).to(self.device)
-                        binary_pred = self.binary_model(binary_input)
-                        binary_prob = torch.sigmoid(binary_pred).cpu().numpy()[0]
-                        print(f"🔧 [DEBUG] Binary prediction: {binary_prob:.6f} (threshold: {self.move_threshold/100:.2f})")
+                        outputs = self.binary_model(binary_input)
+                        move_logits = outputs['move']
                         
-                        if binary_prob >= self.move_threshold/100:
-                            print(f"🔧 [DEBUG] ✅ MOVE DETECTED! Probability: {binary_prob:.6f}")
+                        # Get probability using softmax (same as predict_move method)
+                        move_probs = torch.softmax(move_logits, dim=1).cpu().numpy()[0]
+                        move_confidence = move_probs[1]  # Probability of move (class 1)
+                        
+                        # Use ARGMAX for prediction (same as predict_move method)
+                        move_prediction = np.argmax(move_logits.cpu().numpy(), axis=1)[0]
+                        
+                        print(f"🔧 [DEBUG] Binary logits: {move_logits.cpu().numpy()[0]}")
+                        print(f"🔧 [DEBUG] Binary probs: {move_probs}")
+                        print(f"🔧 [DEBUG] Binary confidence: {move_confidence:.6f} (threshold: {self.move_threshold/100:.2f})")
+                        print(f"🔧 [DEBUG] Binary prediction: {move_prediction}")
+                        
+                        if move_prediction == 1:
+                            print(f"🔧 [DEBUG] ✅ MOVE DETECTED! Prediction: {move_prediction}, Confidence: {move_confidence:.6f}")
                         else:
-                            print(f"🔧 [DEBUG] ❌ NO MOVE - Probability too low: {binary_prob:.6f}")
+                            print(f"🔧 [DEBUG] ❌ NO MOVE - Prediction: {move_prediction}, Confidence: {move_confidence:.6f}")
                 
         # DEBUG: Check sequence shape and content
         if i < 100:  # Only log first 100 attempts to avoid spam

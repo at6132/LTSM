@@ -657,7 +657,7 @@ class TwoPhaseBacktester:
         print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
         
         # Use raw features directly (no scaling)
-        binary_features_scaled = binary_features_processed
+        binary_features_scaled = binary_features_processed.values  # Convert to numpy array
         
         # DEBUG: Log actual model input values for comparison with live trader
         print(f"🔧 [BACKTESTER] ACTUAL MODEL INPUT features after prepare_features:")
@@ -770,7 +770,7 @@ class TwoPhaseBacktester:
         
         # EXPERIMENT: Skip scalers entirely and use raw features
         print(f"🔧 [EXPERIMENT] SKIPPING DIRECTIONAL SCALERS - Using raw features directly")
-        directional_features_final = directional_features_ordered
+        directional_features_final = directional_features_ordered.values  # Convert to numpy array
         
         print(f"✅ Features prepared for both phases")
         

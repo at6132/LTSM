@@ -649,16 +649,15 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # Apply the FIXED scalers
-        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
+        # EXPERIMENT: Skip scalers entirely and use raw features
+        print(f"🔧 [EXPERIMENT] SKIPPING SCALERS - Using raw features directly")
+        print(f"🔧 [EXPERIMENT] Raw features before model input:")
+        temp_raw_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   volume: mean={temp_raw_df['volume'].mean():.6f}, std={temp_raw_df['volume'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
         
-        # DEBUG: Check data AFTER RobustScaler but BEFORE StandardScaler
-        print(f"🔧 [BACKTESTER] Data AFTER RobustScaler:")
-        temp_robust_df = pd.DataFrame(features_robust_scaled, columns=binary_feature_cols, index=binary_features_df.index)
-        print(f"   volume: mean={temp_robust_df['volume'].mean():.6f}, std={temp_robust_df['volume'].std():.6f}")
-        print(f"   impact_proxy: mean={temp_robust_df['impact_proxy'].mean():.6f}, std={temp_robust_df['impact_proxy'].std():.6f}")
-        
-        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
+        # Use raw features directly (no scaling)
+        binary_features_scaled = binary_features_processed
         
         # DEBUG: Log actual model input values for comparison with live trader
         print(f"🔧 [BACKTESTER] ACTUAL MODEL INPUT features after prepare_features:")
@@ -769,9 +768,9 @@ class TwoPhaseBacktester:
             min_scale = 1e-6  # Minimum scale threshold
             fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
         
-        # Apply the FIXED scalers
-        directional_features_scaled = fixed_directional_scaler.transform(directional_features_ordered)
-        directional_features_final = self.directional_standard_scaler.transform(directional_features_scaled)
+        # EXPERIMENT: Skip scalers entirely and use raw features
+        print(f"🔧 [EXPERIMENT] SKIPPING DIRECTIONAL SCALERS - Using raw features directly")
+        directional_features_final = directional_features_ordered
         
         print(f"✅ Features prepared for both phases")
         
@@ -1210,13 +1209,13 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
     volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
                       'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD', 'signed_volatility']
     
-    # CRITICAL FIX: Apply Binance scaling factor BEFORE /1e6 scaling
-    if use_binance:
-        print(f"🔧 Applying Binance scaling factor (1.67) to volume features...")
-        for col in df.columns:
-            if col in volume_features:
-                df[col] = df[col] * 1.67
-                print(f"   Applied 0.598 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+    # EXPERIMENT: Skip scaling factor since we're testing without scalers
+    # if use_binance:
+    #     print(f"🔧 Applying Binance scaling factor (1.67) to volume features...")
+    #     for col in df.columns:
+    #         if col in volume_features:
+    #             df[col] = df[col] * 1.67
+    #             print(f"   Applied 1.67 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
     
     print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
     for col in df.columns:
@@ -1775,13 +1774,13 @@ def load_raw_data(symbol: str = "DOGEUSDT", interval: str = "1m") -> pd.DataFram
     volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
                       'max_size', 'p95_size', 'mean_size', 'signed_vol', 'dCVD', 'CVD', 'signed_volatility']
     
-    # CRITICAL FIX: Apply Binance scaling factor BEFORE /1e6 scaling
-    if use_binance:
-        print(f"🔧 Applying Binance scaling factor (1.67) to volume features...")
-        for col in df.columns:
-            if col in volume_features:
-                df[col] = df[col] * 1.67
-                print(f"   Applied 0.598 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+    # EXPERIMENT: Skip scaling factor since we're testing without scalers
+    # if use_binance:
+    #     print(f"🔧 Applying Binance scaling factor (1.67) to volume features...")
+    #     for col in df.columns:
+    #         if col in volume_features:
+    #             df[col] = df[col] * 1.67
+    #             print(f"   Applied 1.67 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
     
     print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
     for col in df.columns:

@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 import pyarrow.parquet as pq
 import os
 from typing import Dict, List, Tuple
+from pathlib import Path
 import json
 from datetime import datetime
 import warnings
@@ -609,8 +610,72 @@ class TwoPhaseBacktester:
         # Store for final summary
         self.missing_binary_features = missing_binary
         
-        # Use SAVED scalers from checkpoint (not fresh scaling)
-        print(f"🔧 Using SAVED scalers from binary model checkpoint")
+        # CRITICAL FIX: Use FRESH scalers like directional labeling script
+        print(f"🔧 Fitting FRESH scalers on scaler data")
+        
+        # Use scaler data directory if provided, otherwise use recent data
+        if args.scaler_data_dir:
+            scaler_data_path = Path(args.scaler_data_dir)
+            clean_symbol = args.symbol.replace('USDT', '').replace('usdt', '').lower()
+            scaler_klines_file = scaler_data_path / f"scaler_data_{clean_symbol}_klines.csv"
+            scaler_agg_file = scaler_data_path / f"scaler_data_{clean_symbol}_aggTrades.csv"
+            
+            if scaler_klines_file.exists() and scaler_agg_file.exists():
+                print(f"🔧 Using scaler data from {scaler_data_path}")
+                print(f"   Klines: {scaler_klines_file}")
+                print(f"   AggTrades: {scaler_agg_file}")
+                
+                # Load scaler data
+                scaler_klines_df = pd.read_csv(scaler_klines_file)
+                scaler_agg_df = pd.read_csv(scaler_agg_file)
+                
+                # Convert timestamps
+                scaler_klines_df['ts'] = pd.to_datetime(scaler_klines_df['timestamp'], unit='ms')
+                scaler_agg_df['ts'] = pd.to_datetime(scaler_agg_df['Timestamp'], unit='ms')
+                
+                print(f"🔧 Loaded scaler data: {len(scaler_klines_df)} klines, {len(scaler_agg_df)} aggTrades")
+                print(f"📅 Scaler data range: {scaler_klines_df['ts'].min()} to {scaler_klines_df['ts'].max()}")
+                
+                # Use scaler data for fitting
+                df_recent = scaler_klines_df.copy()
+            else:
+                print(f"⚠️ Scaler data files not found, using recent data instead")
+                # Fall back to recent data
+                latest_date = df['ts'].max()
+                thirty_days_ago = latest_date - pd.DateOffset(days=30)
+                df_recent = df[df['ts'] >= thirty_days_ago].copy()
+                print(f"🔧 Using recent data for scaler fitting: {len(df_recent)} samples from {thirty_days_ago} to {latest_date}")
+        else:
+            # Use recent data for scaler fitting (last 30 days - more practical than 6 months)
+            latest_date = df['ts'].max()
+            thirty_days_ago = latest_date - pd.DateOffset(days=30)
+            df_recent = df[df['ts'] >= thirty_days_ago].copy()
+            print(f"🔧 Using recent data for scaler fitting: {len(df_recent)} samples from {thirty_days_ago} to {latest_date}")
+        
+        # Prepare recent data with same preprocessing
+        recent_features_df = pd.DataFrame()
+        for col in binary_feature_cols:
+            if col in df_recent.columns:
+                recent_features_df[col] = df_recent[col]
+            else:
+                recent_features_df[col] = 0.0
+        
+        # Apply same preprocessing to recent data
+        recent_features_processed = recent_features_df.copy()
+        for col in recent_features_processed.columns:
+            if col not in volume_features and recent_features_processed[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                p1, p99 = np.percentile(recent_features_processed[col], [1, 99])
+                recent_features_processed[col] = recent_features_processed[col].clip(p1, p99)
+        
+        # Fit FRESH scalers on recent data
+        from sklearn.preprocessing import RobustScaler, StandardScaler
+        fresh_robust_scaler = RobustScaler()
+        fresh_standard_scaler = StandardScaler()
+        
+        recent_features_robust_scaled = fresh_robust_scaler.fit_transform(recent_features_processed)
+        recent_features_final = fresh_standard_scaler.fit_transform(recent_features_robust_scaled)
+        
+        print(f"🔧 Fresh scalers fitted on recent data")
         
         # Apply preprocessing (volume scaling, outlier clipping) exactly as in training
         volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
@@ -631,16 +696,7 @@ class TwoPhaseBacktester:
                 std_val = binary_features_processed[col].std()
                 print(f"   {col}: mean={mean_val:.6f}, std={std_val:.6f}")
         
-        # CRITICAL FIX: Handle near-zero scale values in RobustScaler
-        # The RobustScaler was fitted on training data with some features having zero variance,
-        # causing scale values near zero (e.g., 4e-10). This collapses live data to constants.
-        
-        # Create a copy of the scaler and fix near-zero scales
-        fixed_scaler = self.binary_robust_scaler
-        if hasattr(fixed_scaler, 'scale_'):
-            # Replace scales that are too small with a reasonable default
-            min_scale = 1e-6  # Minimum scale threshold
-            fixed_scaler.scale_[fixed_scaler.scale_ < min_scale] = min_scale
+        # Using FRESH scalers fitted on recent data (no need to fix old scalers)
         
         # DEBUG: Check data BEFORE scaling
         print(f"🔧 [BACKTESTER] Data BEFORE scaling:")
@@ -648,9 +704,9 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # Apply the FIXED scalers (model expects scaled input)
-        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
-        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
+        # Apply the FRESH scalers (model expects scaled input)
+        features_robust_scaled = fresh_robust_scaler.transform(binary_features_processed)
+        binary_features_scaled = fresh_standard_scaler.transform(features_robust_scaled)
         
         # DEBUG: Check if binary_features_scaled has variation across candles
         print(f"🔧 [DEBUG] binary_features_scaled shape: {binary_features_scaled.shape}")
@@ -2016,7 +2072,7 @@ def main():
     parser.add_argument("--max_hold_minutes", type=int, default=30)
     parser.add_argument("--stop_loss", type=float, default=0.015)
     parser.add_argument("--take_profit", type=float, default=0.035)
-    parser.add_argument("--gui", action="store_true", help="Run with live GUI")
+    parser.add_argument("--scaler_data_dir", default="Live/DOGE", help="Directory containing scaler data CSV files (for fresh scaler fitting)")
     parser.add_argument("--live", action="store_true", help="Use live data from Live/DOGE/ directory instead of parquet files")
     parser.add_argument("--binance", action="store_true", help="Use Binance data files (binancedatadoge.csv, binanceaggtradesdoge.csv) instead of MEXC data")
     parser.add_argument("--raw", action="store_true", help="Use raw OHLCV and aggtrades from data_parquet/ instead of precomputed features")

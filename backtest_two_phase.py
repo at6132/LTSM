@@ -663,6 +663,11 @@ class TwoPhaseBacktester:
         
         # Apply same preprocessing to recent data
         recent_features_processed = recent_features_df.copy()
+        
+        # Define volume features for preprocessing
+        volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
+                          'buy_vol_ratio', 'sell_vol_ratio', 'volume_ratio', 'volume_ma_ratio']
+        
         for col in recent_features_processed.columns:
             if col not in volume_features and recent_features_processed[col].dtype in ['float64', 'float32', 'int64', 'int32']:
                 p1, p99 = np.percentile(recent_features_processed[col], [1, 99])
@@ -679,9 +684,6 @@ class TwoPhaseBacktester:
         print(f"🔧 Fresh scalers fitted on recent data")
         
         # Apply preprocessing (volume scaling, outlier clipping) exactly as in training
-        volume_features = ['volume', 'quote_volume', 'buy_vol', 'sell_vol', 'tot_vol', 
-                          'max_size', 'p95_size', 'signed_vol', 'dCVD', 'CVD']
-        
         binary_features_processed = binary_features_df.copy()
         # SKIP volume scaling - already done in preprocessing
         for col in binary_features_processed.columns:

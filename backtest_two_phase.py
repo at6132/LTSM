@@ -648,15 +648,27 @@ class TwoPhaseBacktester:
         print(f"   volume: mean={temp_before_df['volume'].mean():.6f}, std={temp_before_df['volume'].std():.6f}")
         print(f"   impact_proxy: mean={temp_before_df['impact_proxy'].mean():.6f}, std={temp_before_df['impact_proxy'].std():.6f}")
         
-        # EXPERIMENT: Skip ALL scalers - use raw features directly
-        print(f"🔧 [EXPERIMENT] SKIPPING ALL SCALERS - Using raw features directly")
-        print(f"🔧 [EXPERIMENT] Raw features before model input:")
-        temp_raw_df = pd.DataFrame(binary_features_processed, columns=binary_feature_cols, index=binary_features_df.index)
-        print(f"   volume: mean={temp_raw_df['volume'].mean():.6f}, std={temp_raw_df['volume'].std():.6f}")
-        print(f"   impact_proxy: mean={temp_raw_df['impact_proxy'].mean():.6f}, std={temp_raw_df['impact_proxy'].std():.6f}")
+        # EXPERIMENT: Apply scalers but with aggressive fix for near-zero scales
+        print(f"🔧 [EXPERIMENT] Applying scalers with aggressive scale fixing")
         
-        # Use raw features directly (no scaling at all)
-        binary_features_scaled = binary_features_processed.values  # Convert to numpy array
+        # Create a copy of the scaler and fix near-zero scales more aggressively
+        fixed_scaler = self.binary_robust_scaler
+        if hasattr(fixed_scaler, 'scale_'):
+            # Replace scales that are too small with a reasonable default
+            min_scale = 1e-3  # More aggressive threshold (was 1e-6)
+            fixed_scaler.scale_[fixed_scaler.scale_ < min_scale] = min_scale
+            print(f"🔧 [FIX] Fixed {np.sum(fixed_scaler.scale_ < 1e-6)} near-zero scales")
+        
+        # Apply the FIXED scalers
+        features_robust_scaled = fixed_scaler.transform(binary_features_processed)
+        
+        # DEBUG: Check data AFTER RobustScaler but BEFORE StandardScaler
+        print(f"🔧 [BACKTESTER] Data AFTER RobustScaler:")
+        temp_robust_df = pd.DataFrame(features_robust_scaled, columns=binary_feature_cols, index=binary_features_df.index)
+        print(f"   volume: mean={temp_robust_df['volume'].mean():.6f}, std={temp_robust_df['volume'].std():.6f}")
+        print(f"   impact_proxy: mean={temp_robust_df['impact_proxy'].mean():.6f}, std={temp_robust_df['impact_proxy'].std():.6f}")
+        
+        binary_features_scaled = self.binary_standard_scaler.transform(features_robust_scaled)
         
         # DEBUG: Check if binary_features_scaled has variation across candles
         print(f"🔧 [DEBUG] binary_features_scaled shape: {binary_features_scaled.shape}")
@@ -777,9 +789,20 @@ class TwoPhaseBacktester:
             min_scale = 1e-6  # Minimum scale threshold
             fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
         
-        # EXPERIMENT: Skip ALL scalers - use raw features directly
-        print(f"🔧 [EXPERIMENT] SKIPPING ALL DIRECTIONAL SCALERS - Using raw features directly")
-        directional_features_final = directional_features_ordered
+        # EXPERIMENT: Apply scalers but with aggressive fix for near-zero scales
+        print(f"🔧 [EXPERIMENT] Applying directional scalers with aggressive scale fixing")
+        
+        # Create a copy of the scaler and fix near-zero scales more aggressively
+        fixed_directional_scaler = self.directional_robust_scaler
+        if hasattr(fixed_directional_scaler, 'scale_'):
+            # Replace scales that are too small with a reasonable default
+            min_scale = 1e-3  # More aggressive threshold (was 1e-6)
+            fixed_directional_scaler.scale_[fixed_directional_scaler.scale_ < min_scale] = min_scale
+            print(f"🔧 [FIX] Fixed {np.sum(fixed_directional_scaler.scale_ < 1e-6)} near-zero scales")
+        
+        # Apply the FIXED scalers
+        directional_features_scaled = fixed_directional_scaler.transform(directional_features_ordered)
+        directional_features_final = self.directional_standard_scaler.transform(directional_features_scaled)
         
         print(f"✅ Features prepared for both phases")
         
@@ -903,6 +926,15 @@ class TwoPhaseBacktester:
                         print(f"🔧 [DEBUG] Volume values across sequence: min={volume_values.min():.6f}, max={volume_values.max():.6f}, std={volume_values.std():.6f}")
                         print(f"🔧 [DEBUG] Volume values first 5: {volume_values[:5]}")
                         print(f"🔧 [DEBUG] Volume values last 5: {volume_values[-5:]}")
+                        
+                        # DEBUG: Check if we're extracting the same row multiple times
+                        print(f"🔧 [DEBUG] Checking if sequence extraction is correct:")
+                        print(f"🔧 [DEBUG] binary_features_final shape: {binary_features_final.shape}")
+                        print(f"🔧 [DEBUG] Sample from binary_features_final[{i-59}:{i+1}] volume values:")
+                        sample_volumes = binary_features_final[i-59:i+1, volume_idx]
+                        print(f"🔧 [DEBUG] Sample volumes: min={sample_volumes.min():.6f}, max={sample_volumes.max():.6f}, std={sample_volumes.std():.6f}")
+                        print(f"🔧 [DEBUG] Sample volumes first 5: {sample_volumes[:5]}")
+                        print(f"🔧 [DEBUG] Sample volumes last 5: {sample_volumes[-5:]}")
 
                 # Export exact binary inputs (flattened) sent to model
                 try:

@@ -689,7 +689,7 @@ class TwoPhaseBacktester:
                 binary_features_processed[col] = binary_features_processed[col].clip(p1, p99)
         
         # DEBUG: Check volume feature statistics after preprocessing
-        print(f"🔧 [DEBUG] Volume features after /1e6 scaling:")
+        print(f"🔧 Volume features after scaling:")
         for col in ['volume', 'quote_volume', 'buy_vol', 'sell_vol']:
             if col in binary_features_processed.columns:
                 mean_val = binary_features_processed[col].mean()
@@ -928,8 +928,8 @@ class TwoPhaseBacktester:
                         break
                 
                 # Debug logging for first few attempts
-                if i < 100:  # Only log first 100 attempts to avoid spam
-                    print(f"🔧 [DEBUG] Candle {i} ({current_time}): consecutive_with_trades={consecutive_with_trades}/{self.binary_sequence_length}")
+                if i < 10:  # Only log first 10 attempts to avoid spam
+                    print(f"🔧 Candle {i} ({current_time}): consecutive_with_trades={consecutive_with_trades}/{self.binary_sequence_length}")
                 
                 # Much more lenient: require at least 10 out of 60 candles to have trades (17% threshold)
                 # This matches live trader behavior better for historical data with sparse trade activity
@@ -953,15 +953,17 @@ class TwoPhaseBacktester:
                         # Use ARGMAX for prediction (same as predict_move method)
                         move_prediction = np.argmax(move_logits.cpu().numpy(), axis=1)[0]
                         
-                        print(f"🔧 [DEBUG] Binary logits: {move_logits.cpu().numpy()[0]}")
-                        print(f"🔧 [DEBUG] Binary probs: {move_probs}")
-                        print(f"🔧 [DEBUG] Binary confidence: {move_confidence:.6f} (threshold: {move_threshold:.2f})")
-                        print(f"🔧 [DEBUG] Binary prediction: {move_prediction}")
-                        
-                        if move_prediction == 1:
-                            print(f"🔧 [DEBUG] ✅ MOVE DETECTED! Prediction: {move_prediction}, Confidence: {move_confidence:.6f}")
-                        else:
-                            print(f"🔧 [DEBUG] ❌ NO MOVE - Prediction: {move_prediction}, Confidence: {move_confidence:.6f}")
+                        # Debug: Log prediction details for first few attempts
+                        if i < 10:  # Only log first 10 attempts to avoid spam
+                            print(f"🔧 Binary logits: {move_logits.cpu().numpy()[0]}")
+                            print(f"🔧 Binary probs: {move_probs}")
+                            print(f"🔧 Binary confidence: {move_confidence:.6f} (threshold: {move_threshold:.2f})")
+                            print(f"🔧 Binary prediction: {move_prediction}")
+                            
+                            if move_prediction == 1:
+                                print(f"🔧 ✅ MOVE DETECTED! Prediction: {move_prediction}, Confidence: {move_confidence:.6f}")
+                            else:
+                                print(f"🔧 ❌ NO MOVE - Prediction: {move_prediction}, Confidence: {move_confidence:.6f}")
                 
         # DEBUG: Check sequence shape and content
         if i < 100:  # Only log first 100 attempts to avoid spam
@@ -1178,9 +1180,8 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
         # MEXC data: scale to match RobustScaler expectations
         df['volume'] = df['volume'] * 599.88
     else:
-        # EXPERIMENT: Skip scaling factor - use raw volume data
-        # df['volume'] = df['volume'] * 0.598
-        print(f"🔧 [EXPERIMENT] Using raw volume data without 0.598 scaling")
+        # Binance data: use raw volume data
+        pass
     
     # Add basic technical indicators
     df['r1'] = df['close'].pct_change()
@@ -2075,7 +2076,7 @@ def main():
     parser.add_argument("--scaler_data_dir", default="Live/DOGE", help="Directory containing scaler data CSV files (for fresh scaler fitting)")
     parser.add_argument("--live", action="store_true", help="Use live data from Live/DOGE/ directory instead of parquet files")
     parser.add_argument("--binance", action="store_true", help="Use Binance data files (binancedatadoge.csv, binanceaggtradesdoge.csv) instead of MEXC data")
-    parser.add_argument("--raw", action="store_true", help="Use raw OHLCV and aggtrades from data_parquet/ instead of precomputed features")
+    parser.add_argument("--gui", action="store_true", help="Run with live GUI")
     
     args = parser.parse_args()
     

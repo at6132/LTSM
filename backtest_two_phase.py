@@ -1217,6 +1217,12 @@ def load_live_data(use_binance=False) -> pd.DataFrame:
     #             df[col] = df[col] * 1.67
     #             print(f"   Applied 1.67 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
     
+    # DEBUG: Check raw volume values BEFORE any scaling
+    print(f"🔧 [DEBUG] RAW volume values BEFORE any scaling:")
+    for col in ['volume', 'buy_vol', 'sell_vol', 'tot_vol']:
+        if col in df.columns:
+            print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
+    
     print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
     for col in df.columns:
         if col in volume_features:
@@ -1781,6 +1787,12 @@ def load_raw_data(symbol: str = "DOGEUSDT", interval: str = "1m") -> pd.DataFram
     #         if col in volume_features:
     #             df[col] = df[col] * 1.67
     #             print(f"   Applied 1.67 scaling to {col}: mean={df[col].mean():.6f}, std={df[col].std():.6f}")
+    
+    # DEBUG: Check raw volume values BEFORE any scaling
+    print(f"🔧 [DEBUG] RAW volume values BEFORE any scaling:")
+    for col in ['volume', 'buy_vol', 'sell_vol', 'tot_vol']:
+        if col in df.columns:
+            print(f"   {col}: mean={df[col].mean():.2f}, std={df[col].std():.2f}, min={df[col].min():.2f}, max={df[col].max():.2f}")
     
     print(f"🔧 Applying preprocessing (scaling volume features by 1e6)...")
     for col in df.columns:

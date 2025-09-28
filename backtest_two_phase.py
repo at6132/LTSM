@@ -2076,7 +2076,7 @@ def main():
     parser.add_argument("--scaler_data_dir", default="Live/DOGE", help="Directory containing scaler data CSV files (for fresh scaler fitting)")
     parser.add_argument("--live", action="store_true", help="Use live data from Live/DOGE/ directory instead of parquet files")
     parser.add_argument("--binance", action="store_true", help="Use Binance data files (binancedatadoge.csv, binanceaggtradesdoge.csv) instead of MEXC data")
-    parser.add_argument("--gui", action="store_true", help="Run with live GUI")
+    parser.add_argument("--raw", action="store_true", help="Use raw OHLCV and aggtrades from data_parquet/ instead of precomputed features")
     
     args = parser.parse_args()
     
